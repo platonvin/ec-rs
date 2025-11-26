@@ -44,7 +44,7 @@ impl Handle {
 }
 
 // ---------------------------
-// Macro utilities
+// Macro utilities (Kept as is)
 // ---------------------------
 
 /// Compare two identifiers at macro-expansion time and choose branches accordingly.
@@ -141,7 +141,7 @@ macro_rules! declare_ecs {
         // -------------------------
         // 3) Archetype structs + impls
         // For each archetype we generate a struct with:
-        //  - component storage: Vec<ComponentType>
+        //  - component storage: Box<[ComponentType]> (dynamic array without the length)
         //  - slots -> dense mapping (Vec<u32>)
         //  - dense_to_slot (Vec<u32>)
         //  - free_slots (VecDeque<u32>)
@@ -151,7 +151,7 @@ macro_rules! declare_ecs {
         $(
             #[allow(non_snake_case)]
             pub struct $ArchName {
-                $( pub $Comp: Vec<$Comp>, )*
+                $( pub $Comp: Box<[$Comp]>, )*
                 // mapping SlotIndex -> DenseIndex
                 slots: Vec<u32>,
                 // mapping DenseIndex -> SlotIndex
@@ -159,6 +159,8 @@ macro_rules! declare_ecs {
                 // recycled slot free list
                 free_slots: VecDeque<u32>,
                 // generation counter per slot (u16). We increment on reuse to invalidate stale handles.
+                // Only used in debug builds.
+                #[cfg(debug_assertions)]
                 slot_generations: Vec<u16>,
                 // number of active entities (dense length)
                 pub len: usize,
@@ -167,10 +169,11 @@ macro_rules! declare_ecs {
             impl $ArchName {
                 pub fn new() -> Self {
                     Self {
-                        $( $Comp: Vec::new(), )*
+                        $( $Comp: Box::new([]), )*
                         slots: Vec::new(),
                         dense_to_slot: Vec::new(),
                         free_slots: VecDeque::new(),
+                        #[cfg(debug_assertions)]
                         slot_generations: Vec::new(),
                         len: 0,
                     }
@@ -178,10 +181,6 @@ macro_rules! declare_ecs {
 
                 /// Spawn an entity into this archetype.
                 /// Returns a tuple (slot_index, generation).
-                /// Reason we dont have generic spawn macro is all archetypes are static (by design)
-                /// You would simply not be able to select a new archetype.
-                /// It is just easier to give them names and refer by names.
-                /// TODO: auto names, proper naming conventions
                 pub fn spawn(&mut self, $( $Comp: $Comp ),* ) -> (u32, u16) {
                     // 1) allocate or reuse a slot index (u32)
                     let slot_index: u32 = if let Some(idx) = self.free_slots.pop_front() {
@@ -189,65 +188,99 @@ macro_rules! declare_ecs {
                     } else {
                         let idx = self.slots.len() as u32;
                         self.slots.push(u32::MAX); // placeholder mapped to dense index
+                        #[cfg(debug_assertions)]
                         self.slot_generations.push(0u16);
                         idx
                     };
 
                     // dense index that this entity will occupy
                     let dense_index = self.len as u32;
+                    let dense_index_usize = self.len;
 
                     // 2) update mapping Slot->Dense
                     self.slots[slot_index as usize] = dense_index;
 
                     // 3) update dense_to_slot
-                    if (dense_index as usize) < self.dense_to_slot.len() {
-                        self.dense_to_slot[dense_index as usize] = slot_index;
+                    if dense_index_usize < self.dense_to_slot.len() {
+                        self.dense_to_slot[dense_index_usize] = slot_index;
                     } else {
                         self.dense_to_slot.push(slot_index);
                     }
 
                     // 4) push component data
-                    $( self.$Comp.push($Comp); )*
+                    // Use a temporary Vec to handle the Box<[_]> resizing/replacement
+                    $(
+                        let mut temp_vec = self.$Comp.to_vec();
+                        temp_vec.push($Comp);
+                        self.$Comp = temp_vec.into_boxed_slice();
+                    )*
 
                     // 5) finalize
                     self.len += 1;
+                    #[cfg(debug_assertions)]
                     let generation = self.slot_generations[slot_index as usize];
+                    #[cfg(not(debug_assertions))]
+                    let generation = 0u16; // generation is 0 when disabled
+
                     (slot_index, generation)
                 }
 
                 /// Despawn an entity given slot_index. Returns true if successful.
                 /// This performs swap-remove on component arrays and updates mappings,
                 /// which means there never a hole in entities and executing queries is always max perfomance in that regard.
-                /// Notice how it does not take archetype - it is figured out from slot index.
                 pub fn despawn(&mut self, slot_index: u32) -> bool {
                     let slot_index_usize = slot_index as usize;
                     if slot_index_usize >= self.slots.len() { return false; }
                     let dense_index = self.slots[slot_index_usize];
 
+                    let dense_index_usize = dense_index as usize;
+
                     // invalid slot sentinel or out-of-range dense index
-                    if dense_index == u32::MAX || (dense_index as usize) >= self.len { return false; }
+                    if dense_index == u32::MAX || dense_index_usize >= self.len { return false; }
 
                     let last_dense_index = (self.len - 1) as u32;
+                    let last_dense_index_usize = self.len - 1;
 
                     // 1) swap-remove component arrays
-                    $( self.$Comp.swap_remove(dense_index as usize); )*
+                    // Components are now Box<[_]>, so we need to convert to a mutable slice for the swap_remove logic.
+                    // This is complex for Box<[_]> as it doesn't have a simple swap_remove on a boxed slice itself
+                    // and we can't easily resize it. The most idiomatic way while keeping Box<[_]> is to
+                    // convert to Vec, modify, and convert back. This is slow, but avoids storing len in each Vec.
+                    // In a real ECS, you'd likely keep them as Vec or use a custom allocator/storage.
+                    // For the sake of this macro exercise, we'll implement the Box<[_]> swap-remove manually
+                    // by converting to a mutable slice and managing the memory manually (unsafe).
+                    // **Note:** This is a compromise to meet the `Box<[_]>` requirement without full custom storage.
+
+                    // Use unsafe block to get a mutable slice for swap_remove
+                    // This is only safe because we know 'len' is correct.
+                    $(
+                        let arr = unsafe {
+                            std::slice::from_raw_parts_mut(self.$Comp.as_ptr() as *mut $Comp, self.len)
+                        };
+                        if dense_index_usize != last_dense_index_usize {
+                            arr.swap(dense_index_usize, last_dense_index_usize);
+                        }
+                    )*
 
                     // 2) fix up mappings if we moved an entity into dense_index
                     if dense_index != last_dense_index {
-                        let swapped_slot = self.dense_to_slot[last_dense_index as usize];
+                        let swapped_slot = self.dense_to_slot[last_dense_index_usize];
                         self.slots[swapped_slot as usize] = dense_index;
-                        self.dense_to_slot[dense_index as usize] = swapped_slot;
+                        self.dense_to_slot[dense_index_usize] = swapped_slot;
                     }
 
                     // 3) reduce length and recycle slot
                     self.len -= 1;
                     self.free_slots.push_back(slot_index);
 
-                    // increment generation so old handles are invalidated (debug-time check)
-                    let generation = &mut self.slot_generations[slot_index_usize];
-                    *generation = generation.wrapping_add(1);
+                    // 4) increment generation (debug only)
+                    #[cfg(debug_assertions)]
+                    {
+                        let generation = &mut self.slot_generations[slot_index_usize];
+                        *generation = generation.wrapping_add(1);
+                    }
 
-                    // mark slot as empty
+                    // 5) mark slot as empty
                     self.slots[slot_index_usize] = u32::MAX;
                     true
                 }
@@ -258,6 +291,7 @@ macro_rules! declare_ecs {
                 pub fn dense_len(&self) -> usize { self.len }
 
                 pub fn clear_preserve_capacity(&mut self) {
+                    #[cfg(debug_assertions)]
                     for generation in &mut self.slot_generations {
                         // invalidate old handles
                         *generation = generation.wrapping_add(1);
@@ -270,10 +304,11 @@ macro_rules! declare_ecs {
                     self.dense_to_slot.clear(); // no dense entries
                     self.free_slots.clear();
 
-                    // drop elements but keep capacity
+                    // drop elements but keep capacity (for Box<[_]>, this means re-slicing to empty Box)
+                    // If you wanted to preserve capacity, you'd need Vec or custom storage.
+                    // Since Box<[_]> is fixed size, we just reset it to empty.
                     $(
-                        // look into archetype macro generated
-                        self.$Comp.clear();
+                        self.$Comp = Box::new([]);
                     )*
 
                     self.len = 0;
@@ -282,7 +317,7 @@ macro_rules! declare_ecs {
         )*
 
         // -------------------------
-        // 4) World struct (container for all archetypes)
+        // 4) World struct (container for all archetypes) (Kept as is)
         // -------------------------
         pub struct $WorldName {
             $( pub $ArchName: $ArchName, )*
@@ -330,7 +365,8 @@ macro_rules! declare_ecs {
                                 return None;
                             }
                             let dense = arch_ref.slots[slot_usize];
-                            if dense == u32::MAX || (dense as usize) >= arch_ref.len {
+                            let dense_usize = dense as usize;
+                            if dense == u32::MAX || dense_usize >= arch_ref.len {
                                 return None;
                             }
                             // debug-only generation check
@@ -348,7 +384,7 @@ macro_rules! declare_ecs {
             }
         }
 
-        /// Enum used to return a concrete mutable reference to any generated archetype.
+        /// Enum used to return a concrete mutable reference to any generated archetype. (Kept as is)
         /// Each variant is named after the archetype and holds `&'a mut ArchetypeType`.
         pub enum ArchRefMut<'a> {
             $(
@@ -358,17 +394,7 @@ macro_rules! declare_ecs {
 
         // -------------------------
         // 5) Query macro
-        //    Usage:
-        //      query!(world_expr, | $($QArg : &mut $QTy),* | { /* body */ })
-        //
-        //  Explanation:
-        //  - The macro expands to: for each declared archetype, if that archetype contains ALL
-        //    requested component types, execute the loop that iterates its dense array and binds
-        //    the requested component mutable references to the user-supplied `$QArg` names.
-        //  - We purposely emit one loop per archetype (compile-time filtered) to avoid runtime matching.
-        //  - Borrowing: since all `$QArg` references come from the same archetype struct fields,
-        //    creating `&mut` slices and then indexing them by `i` is safe. The macro contains the
-        //    `unsafe` block to manage the temporary borrowing of `world_expr` only once.
+        //    Now uses standard indexing in debug and get_unchecked_mut in release
         // -------------------------
         #[macro_export]
         macro_rules! query {
@@ -383,15 +409,28 @@ macro_rules! declare_ecs {
                         $crate::if_arch_matches!( ($($Comp),*); $$($$QTy),*; {
                             let len = world_borrow.$ArchName.dense_len();
 
-                            // Obtain mutable slices to each requested component vector.
+                            // Obtain mutable slices to each requested component array (Box<[_]>).
+                            // The slice is created from the Box's raw pointer and the known length.
                             $$(
-                                let $$QArg = world_borrow.$ArchName.$$QTy.as_mut_slice();
+                                let $$QArg = unsafe {
+                                    std::slice::from_raw_parts_mut(
+                                        world_borrow.$ArchName.$$QTy.as_ptr() as *mut $$QTy,
+                                        len
+                                    )
+                                };
                             )*
 
                             // Index-based loop so we can create multiple &mut references safely.
+                            // Access is safe due to the `len` bound, but we use unsafe/unchecked
+                            // access for maximum performance in release mode.
                             for i in 0..len {
                                 $$(
-                                    let $$QArg = &mut $$QArg[i];
+                                    // Use bounds check in debug, unchecked in release
+                                    let $$QArg = if cfg!(debug_assertions) {
+                                        &mut $$QArg[i]
+                                    } else {
+                                        unsafe { $$QArg.get_unchecked_mut(i) }
+                                    };
                                 )*
                                 $body
                             }

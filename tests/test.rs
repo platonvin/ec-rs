@@ -1,17 +1,17 @@
 #![feature(macro_metavar_expr)]
 use ecs::*;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 struct Position {
     x: f32,
     y: f32,
 }
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 struct Velocity {
     x: f32,
     y: f32,
 }
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 struct Health {
     val: i32,
 }
