@@ -3,43 +3,19 @@
 
 use std::collections::VecDeque;
 
-/// A compact handle that identifies an entity across the World.
+/// Compact handle that identifies an entity across the World.
 ///
 /// Layout: [LSB..MSB), bit indices
-/// - 0..32  : slot_index (u32)
+/// - 0..32  : slot_index  (u32)
 /// - 32..48 : generation  (u16)
 /// - 48..56 : arch_id     (u8)
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Handle(u64);
-
-impl Handle {
-    #[inline]
-    pub fn new(arch_id: u8, slot_index: u32, generation: u16) -> Self {
-        let slot_part = slot_index as u64;
-        let gen_part = (generation as u64) << 32;
-        let arch_part = (arch_id as u64) << 48;
-        Handle(slot_part | gen_part | arch_part)
-    }
-
-    #[inline]
-    pub fn empty() -> Self {
-        Handle(0)
-    }
-
-    #[inline]
-    pub fn arch_id(&self) -> u8 {
-        ((self.0 >> 48) & 0xFF) as u8
-    }
-
-    #[inline]
-    pub fn slot_index(&self) -> u32 {
-        (self.0 & 0xFFFF_FFFF) as u32
-    }
-
-    #[inline]
-    pub fn generation(&self) -> u16 {
-        ((self.0 >> 32) & 0xFFFF) as u16
-    }
+/// - 56..64 : reserved for your fav anime waifu name hash
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub struct Handle {
+    pub slot_index: u32,
+    pub generation: u16,
+    pub arch_id: u8,
+    // pub your_fav_waifu_name_hash: u8,
 }
 
 /// Compare two identifiers at macro-expansion time and choose branches accordingly.
@@ -94,9 +70,7 @@ macro_rules! if_arch_matches {
     };
 }
 
-// ---------------------------
 // The big ahh generator macro
-// ---------------------------
 #[macro_export]
 macro_rules! declare_ecs {
     (
@@ -116,7 +90,6 @@ macro_rules! declare_ecs {
         }
 
         impl ArchId {
-            #[inline]
             pub fn as_u8(self) -> u8 { self as u8 }
         }
 
@@ -156,7 +129,7 @@ macro_rules! declare_ecs {
 
                 /// Spawn an entity into this archetype.
                 /// Returns a tuple (slot_index, generation).
-                pub fn spawn(&mut self, $( $Comp: $Comp ),* ) -> (u32, u16) {
+                pub fn spawn(&mut self, $( $Comp: $Comp ),* ) -> Handle {
                     let slot_index: u32 = if let Some(idx) = self.free_slots.pop_front() {
                         idx
                     } else {
@@ -187,19 +160,25 @@ macro_rules! declare_ecs {
                     #[cfg(not(debug_assertions))]
                     let generation = 0u16;
 
-                    (slot_index, generation)
+                    let arch_id = ArchId::$ArchName.as_u8();
+
+                    Handle {
+                        arch_id,
+                        slot_index,
+                        generation,
+                    }
                 }
 
                 /// Despawn an entity given slot_index. Returns true if successful.
-                pub fn despawn(&mut self, slot_index: u32) -> bool {
-                    let slot_index_usize = slot_index as usize;
-                    if slot_index_usize >= self.slots.len() { return false; }
-                    let dense_index = self.slots[slot_index_usize];
+                pub fn despawn(&mut self, handle: Handle) {
+                    let slot_index_usize = handle.slot_index as usize;
+                    debug_assert!(slot_index_usize < self.slots.len());
 
+                    let dense_index = self.slots[slot_index_usize];
                     let dense_index_usize = dense_index as usize;
 
-                    // invalid slot sentinel or out-of-range dense index
-                    if dense_index == u32::MAX || dense_index_usize >= self.len { return false; }
+                    debug_assert!(dense_index != u32::MAX);
+                    debug_assert!(dense_index_usize < self.len);
 
                     let last_dense_index = (self.len - 1) as u32;
                     let last_dense_index_usize = self.len - 1;
@@ -208,7 +187,8 @@ macro_rules! declare_ecs {
                     $( self.$Comp.swap_remove(dense_index_usize); )*
 
                     // fix up mappings if we moved an entity into dense_index
-                    if dense_index_usize != last_dense_index_usize {
+                    let was_despawned_last: bool = dense_index_usize == last_dense_index_usize;
+                    if !was_despawned_last {
                         let swapped_slot = self.dense_to_slot[last_dense_index_usize];
                         // moved entity now resides at dense_index
                         self.slots[swapped_slot as usize] = dense_index;
@@ -219,21 +199,20 @@ macro_rules! declare_ecs {
 
                     // reduce length and recycle slot
                     self.len -= 1;
-                    self.free_slots.push_back(slot_index);
+                    self.free_slots.push_back(handle.slot_index);
 
                     #[cfg(debug_assertions)]
                     {
                         // increment generation
                         let generation = &mut self.slot_generations[slot_index_usize];
+                        debug_assert!(handle.generation == *generation);
                         *generation = generation.wrapping_add(1);
                     }
 
                     // mark slot as empty
                     self.slots[slot_index_usize] = u32::MAX;
-                    true
                 }
 
-                #[inline]
                 pub fn dense_len(&self) -> usize { self.len }
 
                 pub fn clear_preserve_capacity(&mut self) {
@@ -286,8 +265,8 @@ macro_rules! declare_ecs {
             }
 
             pub fn get_slot_dense_index_and_check(&mut self, handle: Handle) -> Option<(ArchId, u32)> {
-                let arch = handle.arch_id();
-                let slot_index = handle.slot_index();
+                let arch = handle.arch_id;
+                let slot_index = handle.slot_index;
                 let arch_enum = unsafe { std::mem::transmute::<u8, ArchId>(arch) };
                 match arch_enum {
                     $(
@@ -305,7 +284,7 @@ macro_rules! declare_ecs {
                             #[cfg(debug_assertions)]
                             {
                                 let generation = arch_ref.slot_generations[slot_usize];
-                                if generation != handle.generation() {
+                                if generation != handle.generation {
                                     return None;
                                 }
                             }
@@ -323,16 +302,18 @@ macro_rules! declare_ecs {
         }
 
         // Main "iter through components macro"
+        // Note how it is expanding macro, generatated in macro
+        // to pull this off we sometimes need to use $$ instead of $
         #[macro_export]
         macro_rules! query {
             // Pattern: query!( world_expr, | arg: &mut Type, ... | { lambda body } )
-            // double dollar because thats how nested macros work
             ( $world_expr:expr, | $$( $$QArg:tt : &mut $$QTy:tt ),* | $body:block ) => {
                 {
                     let world_mut_ref = &mut $world_expr;
 
                     $(
                         // emit this archetype's loop only if it contains ALL requested component types
+                        // double dollar because thats how nested macros work
                         $crate::if_arch_matches!( ($($Comp),*); $$($$QTy),*; {
                             let len = world_mut_ref.$ArchName.dense_len();
 
