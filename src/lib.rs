@@ -1,8 +1,6 @@
 #![allow(unused)]
 #![feature(macro_metavar_expr)]
 
-use std::collections::VecDeque;
-
 /// Compact handle that identifies an entity across the World.
 ///
 /// Layout: [LSB..MSB), bit indices
@@ -79,8 +77,6 @@ macro_rules! declare_ecs {
             $( $ArchName:ident : ( $( $Comp:ident ),* ) ),* $(,)?
         }
     ) => {
-        use std::collections::VecDeque;
-
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         #[repr(u8)]
         pub enum ArchId {
@@ -106,7 +102,7 @@ macro_rules! declare_ecs {
                 // mapping DenseIndex -> SlotIndex
                 dense_to_slot: Vec<u32>,
                 // recycled slot free list
-                free_slots: VecDeque<u32>,
+                free_slots: std::collections::VecDeque<u32>,
                 // generation counter per slot (u16). Only used in debug builds.
                 #[cfg(debug_assertions)]
                 slot_generations: Vec<u16>,
@@ -120,7 +116,7 @@ macro_rules! declare_ecs {
                         $( $Comp: Vec::new(), )*
                         slots: Vec::new(),
                         dense_to_slot: Vec::new(),
-                        free_slots: VecDeque::new(),
+                        free_slots: std::collections::VecDeque::new(),
                         #[cfg(debug_assertions)]
                         slot_generations: Vec::new(),
                         len: 0,
