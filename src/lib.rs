@@ -1,5 +1,8 @@
 #![allow(unused)]
 #![feature(macro_metavar_expr)]
+#![feature(macro_metavar_expr_concat)]
+
+pub use sibling_vecs;
 
 /// Compact handle that identifies an entity across the World.
 ///
@@ -68,6 +71,69 @@ macro_rules! if_arch_matches {
     };
 }
 
+#[macro_export]
+macro_rules! invoke_with_concat {
+    ($ArchName:ident, { $($acc:tt)* }, $Comp:ident, { $($tail:tt)* }, $field_name:ident) => {
+        $crate::generate_storage_recursive!(
+            $ArchName,
+            { $($acc)* $field_name : $Comp, },
+            { $($tail)* }
+        );
+    }
+}
+
+#[macro_export]
+macro_rules! generate_storage_recursive {
+    ( $ArchName:ident, { $( $field:ident : $type:ident, )* }, {} ) => {
+         sibling_vecs::sibling_vecs! {
+            // Note: ${concat} works here because it is not inside a repetition
+            pub struct ${concat($ArchName, ComponentStorage)} {
+                $( $field : $type, )*
+            }
+         }
+    };
+
+    ( $ArchName:ident, { $( $acc:tt )* }, { $head:ident, $($tail:ident),* } ) => {
+         $crate::invoke_with_concat!(
+            $ArchName,
+            { $($acc)* },
+            $head,
+            { $($tail),* },
+            // ${concat(component, $head)}
+            $head
+         );
+    };
+
+    ( $ArchName:ident, { $( $acc:tt )* }, { $head:ident } ) => {
+         $crate::invoke_with_concat!(
+            $ArchName,
+            { $($acc)* },
+            $head,
+            {},
+            // ${concat(component, $head)}
+            $head
+         );
+    };
+}
+
+#[macro_export]
+macro_rules! concatenate_component_storage {
+    ( $a:ident ) => {${concat($a, ComponentStorage)}};
+}
+
+#[macro_export]
+macro_rules! access_component_field {
+    ($storage:expr, $Comp:ident) => {
+        $storage.$Comp()
+    };
+}
+#[macro_export]
+macro_rules! access_component_field_mut {
+    ($storage:expr, $Comp:ident) => {
+        $storage.${concat($Comp, _mut)}()
+    };
+}
+
 // The big ahh generator macro
 #[macro_export]
 macro_rules! declare_ecs {
@@ -93,16 +159,27 @@ macro_rules! declare_ecs {
         pub const ARCH_COUNT: usize = ${count($ArchName)};
 
         $(
+            // TODO:
+            // nested concat is not supported yet
+            $crate::generate_storage_recursive!( $ArchName, {}, { $($Comp),* } );
+            // could be just this:
+            // sibling_vecs::sibling_vecs! {
+            //     pub struct ${concat($ArchName, ComponentStorage)} {
+            //         $( ${concat(component, $Comp)} : $Comp, )*
+            //     }
+            // }
+
             #[allow(non_snake_case)]
             pub struct $ArchName {
                 // Component storage: Vec<ComponentType> (uses Vec for efficient push/swap_remove)
-                $( pub $Comp: Vec<$Comp>, )*
+                // $( pub $Comp: Vec<$Comp>, )*
+                storage: ${concat($ArchName, ComponentStorage)},
                 // mapping SlotIndex -> DenseIndex
                 slots: Vec<u32>,
                 // mapping DenseIndex -> SlotIndex
                 dense_to_slot: Vec<u32>,
                 // recycled slot free list
-                free_slots: std::collections::VecDeque<u32>,
+                free_slots: ::std::collections::VecDeque<u32>,
                 // generation counter per slot (u16). Only used in debug builds.
                 #[cfg(debug_assertions)]
                 slot_generations: Vec<u16>,
@@ -113,10 +190,11 @@ macro_rules! declare_ecs {
             impl $ArchName {
                 pub fn new() -> Self {
                     Self {
-                        $( $Comp: Vec::new(), )*
+                        // $( $Comp: Vec::new(), )*
+                        storage: ${concat($ArchName, ComponentStorage)}::new(),
                         slots: Vec::new(),
                         dense_to_slot: Vec::new(),
-                        free_slots: std::collections::VecDeque::new(),
+                        free_slots: ::std::collections::VecDeque::new(),
                         #[cfg(debug_assertions)]
                         slot_generations: Vec::new(),
                         len: 0,
@@ -125,7 +203,7 @@ macro_rules! declare_ecs {
 
                 /// Spawn an entity into this archetype.
                 /// Returns a tuple (slot_index, generation).
-                pub fn spawn(&mut self, $( $Comp: $Comp ),* ) -> Handle {
+                pub fn spawn(&mut self, $( $Comp: $Comp ),* ) -> $crate::Handle {
                     let slot_index: u32 = if let Some(idx) = self.free_slots.pop_front() {
                         idx
                     } else {
@@ -147,7 +225,10 @@ macro_rules! declare_ecs {
                         self.dense_to_slot.push(slot_index);
                     }
 
-                    $( self.$Comp.push($Comp); )*
+                    // $( self.$Comp.push($Comp); )*
+                    self.storage.push (
+                        $($Comp,)*
+                    );
 
                     self.len += 1;
 
@@ -158,7 +239,7 @@ macro_rules! declare_ecs {
 
                     let arch_id = ArchId::$ArchName.as_u8();
 
-                    Handle {
+                    $crate::Handle {
                         arch_id,
                         slot_index,
                         generation,
@@ -166,7 +247,7 @@ macro_rules! declare_ecs {
                 }
 
                 /// Despawn an entity given slot_index. Returns true if successful.
-                pub fn despawn(&mut self, handle: Handle) {
+                pub fn despawn(&mut self, handle: $crate::Handle) {
                     let slot_index_usize = handle.slot_index as usize;
                     debug_assert!(slot_index_usize < self.slots.len());
 
@@ -180,7 +261,9 @@ macro_rules! declare_ecs {
                     let last_dense_index_usize = self.len - 1;
 
                     // swap-remove components in component arrays
-                    $( self.$Comp.swap_remove(dense_index_usize); )*
+                    // $( self.$Comp.swap_remove(dense_index_usize); )*
+                    self.storage.swap_remove(dense_index_usize);
+
 
                     // fix up mappings if we moved an entity into dense_index
                     let was_despawned_last: bool = dense_index_usize == last_dense_index_usize;
@@ -225,12 +308,25 @@ macro_rules! declare_ecs {
                     self.dense_to_slot.clear();
                     self.free_slots.clear();
 
-                    $(
-                        self.$Comp.clear();
-                    )*
+                    // $(
+                    //     self.$Comp.clear();
+                    // )*
+                    self.storage.clear();
 
                     self.len = 0;
                 }
+
+                $(
+                    pub fn $Comp(&self) -> &[$Comp] {
+                        self.storage.$Comp()
+                    }
+                )*
+
+                // $(
+                //     pub fn ${concat($Comp, _mut)}(&self) -> &mut [$Comp] {
+                //         self.storage.$Comp()
+                //     }
+                // )*
             }
         )*
 
@@ -260,10 +356,10 @@ macro_rules! declare_ecs {
                 }
             }
 
-            pub fn get_slot_dense_index_and_check(&mut self, handle: Handle) -> Option<(ArchId, u32)> {
+            pub fn get_slot_dense_index_and_check(&mut self, handle: $crate::Handle) -> Option<(ArchId, u32)> {
                 let arch = handle.arch_id;
                 let slot_index = handle.slot_index;
-                let arch_enum = unsafe { std::mem::transmute::<u8, ArchId>(arch) };
+                let arch_enum = unsafe { ::std::mem::transmute::<u8, ArchId>(arch) };
                 match arch_enum {
                     $(
                         ArchId::$ArchName => {
@@ -315,13 +411,9 @@ macro_rules! declare_ecs {
 
                             // obtain mutable slices to each requested component vector
                             $$(
-                                // we only access elements up to len in the loop
                                 let $$QArg = unsafe {
-                                    std::slice::from_raw_parts_mut(
-                                        world_mut_ref.$ArchName.$$QTy.as_mut_ptr() as *mut $$QTy,
-                                        len
-                                    )
-                                };
+                                    crate::access_component_field_mut!(world_mut_ref.$ArchName.storage, $$QTy)
+                                    };
                             )*
 
                             // iter through entities in this archetype, load necessary components and execute lambda
@@ -334,6 +426,7 @@ macro_rules! declare_ecs {
                                         unsafe { $$QArg.get_unchecked_mut(i) }
                                     };
                                 )*
+                                // so weird to do this to lambdas lol
                                 $body
                             }
                         });
