@@ -31,7 +31,7 @@ declare_ecs! {
 fn test_spawn_and_query() {
     let mut world = MyWorld::new();
 
-    world.movers.spawn(Position { x: 0.0, y: 0.0 }, Velocity { x: 1.0, y: 0.0 });
+    let mover_0 = world.movers.spawn(Position { x: 0.0, y: 0.0 }, Velocity { x: 1.0, y: 0.0 });
     world.statics.spawn(Position { x: 10.0, y: 10.0 }, Health { val: 100 });
     world.player.spawn(
         Position { x: 5.0, y: 5.0 },
@@ -47,8 +47,16 @@ fn test_spawn_and_query() {
     assert_eq!(world.statics.Position()[0].x, 11.0);
     assert_eq!(world.player.Position()[0].x, 6.0);
 
-    query!(world, |vel: &mut Velocity| {
+    query!(world, |vel: &mut Velocity, pos: &mut Position| {
         vel.x += 10.0;
+        let mover = world.get_entity_mut(mover_0).unwrap();
+        match mover {
+            ArchEntityRefs::movers(movers_entity_refs) => todo!(),
+            ArchEntityRefs::statics(statics_entity_refs) => todo!(),
+            ArchEntityRefs::player(player_entity_refs) => todo!(),
+        }
+        let (pos, vel) = extract_components_from_refs!(mover, [Position, Velocity]).unwrap();
+        pos.x += vel.x;
     });
 
     assert_eq!(world.movers.Velocity()[0].x, 11.0);
