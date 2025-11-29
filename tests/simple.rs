@@ -39,7 +39,7 @@ fn test_spawn_and_query() {
         Health { val: 50 },
     );
 
-    query!(world, |pos: &mut Position| {
+    query!(world, [pos: &mut Position] {
         pos.x += 1.0;
     });
 
@@ -47,17 +47,13 @@ fn test_spawn_and_query() {
     assert_eq!(world.statics.Position()[0].x, 11.0);
     assert_eq!(world.player.Position()[0].x, 6.0);
 
-    query!(world, |vel: &mut Velocity, pos: &mut Position| {
+    query!(world, [vel: &mut Velocity, pos: &mut Position]{
         vel.x += 10.0;
-        let mover = world.get_entity_mut(mover_0).unwrap();
-        match mover {
-            ArchEntityRefs::movers(movers_entity_refs) => todo!(),
-            ArchEntityRefs::statics(statics_entity_refs) => todo!(),
-            ArchEntityRefs::player(player_entity_refs) => todo!(),
-        }
-        let (pos, vel) = extract_components_from_refs!(mover, [Position, Velocity]).unwrap();
         pos.x += vel.x;
     });
+
+    let mut mover = unsafe { world.get_entity_mut(mover_0).unwrap() };
+    let (pos, vel) = extract_components_from_refs!(mover, [Position, Velocity]).unwrap();
 
     assert_eq!(world.movers.Velocity()[0].x, 11.0);
     assert_eq!(world.player.Velocity()[0].x, 10.0);

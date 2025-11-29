@@ -1,0 +1,3 @@
+actually use generations
+merge free indices into that alloc (so actuall 1 alloc per archetype)
+implement evaluation of nested metaravariables expressions

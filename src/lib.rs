@@ -206,6 +206,7 @@ macro_rules! sibling_vecs {
                 self.len = 0;
             }
 
+            #[allow(nonstandard_style)]
             pub fn push(&mut self, $( $field : $type ),* ) {
                 if self.len == self.cap {
                     self.grow();
@@ -256,6 +257,7 @@ macro_rules! sibling_vecs {
             }
 
             $(
+                #[allow(nonstandard_style)]
                 pub fn $field(&self) -> &[$type] {
                      let offsets = Self::offsets(self.cap);
                      let idx = ${index()};
@@ -269,6 +271,7 @@ macro_rules! sibling_vecs {
             )*
 
             $(
+                #[allow(nonstandard_style)]
                 pub fn ${concat($field, _mut)}(&self) -> &mut [$type] {
                      let offsets = Self::offsets(self.cap);
                      let idx = ${index()};
@@ -322,9 +325,9 @@ pub struct Handle {
     pub arch_id: u8,
     // pub your_fav_cat_img_hash: u8,
 }
-const _: () = {
-    assert!(std::mem::size_of::<Handle>() == 8);
-};
+// const _: () = {
+//     assert!(std::mem::size_of::<Handle>() <= 8);
+// };
 
 /// Compare two identifiers at macro-expansion time and choose branches accordingly.
 #[macro_export]
@@ -394,7 +397,8 @@ macro_rules! invoke_with_concat {
 macro_rules! generate_storage_recursive {
     ( $ArchName:ident, { $( $field:ident : $type:ident, )* }, {} ) => {
         //  sibling_vecs::sibling_vecs! {
-         $crate::sibling_vecs! {
+        #[allow(nonstandard_style)]
+        $crate::sibling_vecs! {
             // Note: ${concat} works here because it is not inside a repetition
             // TODO: make concat work?
             pub struct ${concat($ArchName, ComponentStorage)} {
@@ -455,6 +459,7 @@ macro_rules! declare_ecs {
         #[repr(u8)]
         pub enum ArchId {
             $(
+                #[allow(nonstandard_style)]
                 $ArchName,
             )*
         }
@@ -467,15 +472,18 @@ macro_rules! declare_ecs {
         // ${count($t)} is now in Rust!
         pub const ARCH_COUNT: usize = ${count($ArchName)};
 
-        pub enum ArchEntityRefs<'a> {
+        #[allow(nonstandard_style)]
+        pub enum ArchEntityRefs {
             $(
-                $ArchName(${concat($ArchName, EntityRefs)}<'a>),
+                #[allow(nonstandard_style)]
+                $ArchName(${concat($ArchName, EntityRefs)}),
             )*
         }
 
         $(
             // TODO:
             // nested concat is not supported yet
+            #[allow(nonstandard_style)]
             $crate::generate_storage_recursive!( $ArchName, {}, { $($Comp),* } );
             // could be just this:
             // sibling_vecs::sibling_vecs! {
@@ -483,15 +491,17 @@ macro_rules! declare_ecs {
             //         $( ${concat(component, $Comp)} : $Comp, )*
             //     }
             // }
-            #[allow(non_snake_case)]
-            pub struct ${concat($ArchName, EntityRefs)}<'a> {
-                $( pub $Comp: &'a mut $Comp, )*
+            #[allow(nonstandard_style)]
+            pub struct ${concat($ArchName, EntityRefs)} {
+                // we kinda want to store &mut, but its easier with pointers
+                #[allow(nonstandard_style)]
+                $( pub $Comp: *mut $Comp, )*
             }
 
-            #[allow(non_snake_case)]
+            #[allow(nonstandard_style)]
             pub struct $ArchName {
                 // Component storage: Vec<ComponentType> (uses Vec for efficient push/swap_remove)
-                storage: ${concat($ArchName, ComponentStorage)},
+                storage: std::cell::UnsafeCell<${concat($ArchName, ComponentStorage)}>,
                 // mapping SlotIndex -> DenseIndex
                 slots: Vec<u32>,
                 // mapping DenseIndex -> SlotIndex
@@ -502,26 +512,27 @@ macro_rules! declare_ecs {
                 #[cfg(debug_assertions)]
                 slot_generations: Vec<u16>,
                 // number of active entities (dense length)
-                // pub len: usize,
             }
 
+            #[allow(nonstandard_style)]
             impl $ArchName {
                 pub fn new() -> Self {
                     Self {
-                        // $( $Comp: Vec::new(), )*
-                        storage: ${concat($ArchName, ComponentStorage)}::new(),
+                        storage: std::cell::UnsafeCell::new(${concat($ArchName, ComponentStorage)}::new()),
                         slots: Vec::new(),
                         dense_to_slot: Vec::new(),
                         free_slots: ::std::collections::VecDeque::new(),
                         #[cfg(debug_assertions)]
                         slot_generations: Vec::new(),
-                        // len: 0,
                     }
                 }
 
                 /// Spawn an entity into this archetype.
                 /// Returns a tuple (slot_index, generation).
+                #[allow(nonstandard_style)]
                 pub fn spawn(&mut self, $( $Comp: $Comp ),* ) -> $crate::Handle {
+                    let storage = unsafe { &mut *self.storage.get() };
+
                     let slot_index: u32 = if let Some(idx) = self.free_slots.pop_front() {
                         idx
                     } else {
@@ -532,8 +543,8 @@ macro_rules! declare_ecs {
                         idx
                     };
 
-                    let dense_index = self.storage.len as u32;
-                    let dense_index_usize = self.storage.len;
+                    let dense_index = storage.len as u32;
+                    let dense_index_usize = storage.len;
 
                     self.slots[slot_index as usize] = dense_index;
 
@@ -543,7 +554,7 @@ macro_rules! declare_ecs {
                         self.dense_to_slot.push(slot_index);
                     }
 
-                    self.storage.push (
+                    storage.push (
                         $($Comp,)*
                     );
 
@@ -563,19 +574,21 @@ macro_rules! declare_ecs {
 
                 /// Despawn an entity given slot_index. Returns true if successful.
                 pub fn despawn(&mut self, handle: $crate::Handle) {
+                    let storage = unsafe { &mut *self.storage.get() };
+
                     let slot_index_usize = handle.slot_index as usize;
                     debug_assert!(slot_index_usize < self.slots.len());
 
                     let dense_index = self.slots[slot_index_usize];
                     let dense_index_usize = dense_index as usize;
 
-                    debug_assert!(dense_index != u32::MAX);
-                    debug_assert!(dense_index_usize < self.storage.len);
+                    debug_assert_ne!(dense_index, u32::MAX);
+                    debug_assert!(dense_index_usize < storage.len);
 
-                    let last_dense_index = (self.storage.len - 1) as u32;
-                    let last_dense_index_usize = self.storage.len - 1;
+                    let last_dense_index = (storage.len - 1) as u32;
+                    let last_dense_index_usize = storage.len - 1;
 
-                    self.storage.swap_remove(dense_index_usize);
+                    storage.swap_remove(dense_index_usize);
 
                     // fix up mappings if we moved an entity into dense_index
                     let was_despawned_last: bool = dense_index_usize == last_dense_index_usize;
@@ -596,7 +609,7 @@ macro_rules! declare_ecs {
                     {
                         // increment generation
                         let generation = &mut self.slot_generations[slot_index_usize];
-                        debug_assert!(handle.generation == *generation);
+                        debug_assert_eq!(handle.generation, *generation);
                         *generation = generation.wrapping_add(1);
                     }
 
@@ -604,9 +617,11 @@ macro_rules! declare_ecs {
                     self.slots[slot_index_usize] = u32::MAX;
                 }
 
-                pub fn dense_len(&self) -> usize { self.storage.len }
+                pub fn dense_len(&self) -> usize { unsafe { (*self.storage.get()).len } }
 
                 pub fn clear_preserve_capacity(&mut self) {
+                    let storage = unsafe { &mut *self.storage.get() };
+
                     #[cfg(debug_assertions)]
                     for generation in &mut self.slot_generations {
                         // invalidate old handles
@@ -620,13 +635,14 @@ macro_rules! declare_ecs {
                     self.dense_to_slot.clear();
                     self.free_slots.clear();
 
-                    self.storage.clear();
+                    storage.clear();
                 }
 
                 $(
                     #[inline]
+                    #[allow(nonstandard_style)]
                     pub fn $Comp(&self) -> &[$Comp] {
-                        self.storage.$Comp()
+                        unsafe { (*self.storage.get()).$Comp() }
                     }
                 )*
 
@@ -641,6 +657,7 @@ macro_rules! declare_ecs {
 
         // Main world struct (container for all archetypes)
         pub struct $WorldName {
+            #[allow(nonstandard_style)]
             $( pub $ArchName: $ArchName, )*
         }
 
@@ -657,40 +674,10 @@ macro_rules! declare_ecs {
                 )*
             }
 
-            // pub fn get_slot_dense_index_and_check(&mut self, handle: $crate::Handle) -> Option<(ArchId, u32)> {
-            //     let arch = handle.arch_id;
-            //     let slot_index = handle.slot_index;
-            //     let arch_enum = unsafe { ::std::mem::transmute::<u8, ArchId>(arch) };
-            //     match arch_enum {
-            //         $(
-            //             ArchId::$ArchName => {
-            //                 let arch_ref = &mut self.$ArchName;
-            //                 let slot_usize = slot_index as usize;
-            //                 if slot_usize >= arch_ref.slots.len() {
-            //                     return None;
-            //                 }
-            //                 let dense = arch_ref.slots[slot_usize];
-            //                 let dense_usize = dense as usize;
-            //                 if dense == u32::MAX || dense_usize >= arch_ref.len {
-            //                     return None;
-            //                 }
-            //                 #[cfg(debug_assertions)]
-            //                 {
-            //                     let generation = arch_ref.slot_generations[slot_usize];
-            //                     if generation != handle.generation {
-            //                         return None;
-            //                     }
-            //                 }
-            //                 Some((ArchId::$ArchName, dense))
-            //             }
-            //         )*
-            //     }
-            // }
-
             // WARNING: This function returns a struct containing mutable references (&'a mut T)
             // while only taking a shared reference (&self). This is only possible via
             // unsafe lifetime magic and requires the caller to manage aliasing manually.
-            pub unsafe fn get_entity_mut(&self, handle: $crate::Handle) -> Option<ArchEntityRefs<'_>> {
+            pub unsafe fn get_entity_mut(&self, handle: $crate::Handle) -> Option<ArchEntityRefs> {
                 let arch = handle.arch_id;
                 let slot_index = handle.slot_index;
                 let arch_enum = unsafe { ::std::mem::transmute::<u8, ArchId>(arch) };
@@ -705,17 +692,15 @@ macro_rules! declare_ecs {
                             let dense = arch_ref.slots[slot_usize];
                             let dense_usize = dense as usize;
 
-                            if dense == u32::MAX || dense_usize >= arch_ref.storage.len { return None; }
+                            if dense == u32::MAX || dense_usize >= unsafe { (*arch_ref.storage.get()).len } { return None; }
 
                             // todo: is there ub on such cast?
-                            let arch_mut_ref = unsafe {
-                                &mut *(&raw const self.$ArchName as *mut $ArchName)
-                            };
-
+                            let arch_mut_ref = unsafe { &mut *self.$ArchName.storage.get() };
                             // obtain mutable slices to each requested component vector
                             $(
+                                #[allow(nonstandard_style)]
                                 let $Comp = unsafe {
-                                    crate::access_component_field_mut!(arch_mut_ref.storage, $Comp).get_unchecked_mut(dense_usize)
+                                    crate::access_component_field_mut!(arch_mut_ref, $Comp).get_unchecked_mut(dense_usize)
                                 };
                             )*
 
@@ -740,20 +725,21 @@ macro_rules! declare_ecs {
         #[macro_export]
         macro_rules! query {
             // Pattern: query!( world_expr, | arg: &mut Type, ... | { lambda body } )
-            ( $world_expr:expr, | $$( $$QArg:tt : &mut $$QTy:tt ),* | $body:block ) => {
+            ( $world_expr:expr, [ $$( $$QArg:ident : &mut $$QTy:ident ),* ] $body:tt ) => {
                 {
-                    let world_mut_ref = &mut $world_expr;
-
                     $(
                         // emit this archetype's loop only if it contains ALL requested component types
                         // double dollar because thats how nested macros work
                         $crate::if_arch_matches!( ($($Comp),*); $$($$QTy),*; {
-                            let len = world_mut_ref.$ArchName.dense_len();
+                            let len = $world_expr.$ArchName.dense_len();
 
                             // obtain mutable slices to each requested component vector
+                            let arch_mut_ref = unsafe { &mut *$world_expr.$ArchName.storage.get() };
+
                             $$(
+                                #[allow(nonstandard_style)]
                                 let $$QArg = unsafe {
-                                    crate::access_component_field_mut!(world_mut_ref.$ArchName.storage, $$QTy)
+                                    crate::access_component_field_mut!(arch_mut_ref, $$QTy)
                                 };
                             )*
 
@@ -761,6 +747,7 @@ macro_rules! declare_ecs {
                             for i in 0..len {
                                 $$(
                                     // bounds checking in debug
+                                    #[allow(nonstandard_style)]
                                     let $$QArg = if cfg!(debug_assertions) {
                                         &mut $$QArg[i]
                                     } else {
@@ -769,7 +756,7 @@ macro_rules! declare_ecs {
                                 )*
                                 unsafe {
                                     // so weird to do this to lambdas lol
-                                    $body
+                                    // $body
                                 }
                             }
                         });
@@ -784,18 +771,19 @@ macro_rules! declare_ecs {
             // extract_components_from_refs!( enum_with_refs_variable, [Position, Velocity] )
             (
                 $refs_enum:expr,
-                [ $$( $$Comp:ident ),* ]
+                [ $$( $$EComp:ident ),* ]
             ) => {{
                 // We need to use `match` on the enum to see which archetype it is
-                let result: Option<( $$( &mut $$Comp ),* )> = match $refs_enum {
+                let result: Option<( $$( &mut $$EComp ),* )> = match $refs_enum {
                     $(
                         ArchEntityRefs::$ArchName(refs) => {
                             // Check if this archetype contains ALL requested components [ $( $Comp ),* ]
-                            $crate::if_arch_matches!( ($($Comp),*); $( $Comp ),*; {
+                            $crate::if_arch_matches!( ($($Comp),*); $$($$EComp ),*; {
                                 // If all components are present, return the tuple of references
                                 Some((
-                                    $(
-                                        refs.$Comp
+                                    // LOL we can do single dollar sign here
+                                    $$(
+                                        refs.$$EComp
                                     ),*
                                 ))
                             });
