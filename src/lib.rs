@@ -1,384 +1,56 @@
-#![allow(unused)]
 #![feature(macro_metavar_expr)]
 #![feature(macro_metavar_expr_concat)]
+#![feature(decl_macro)]
 
-#[macro_export]
-macro_rules! sibling_vecs {
-    (
-        $vis:vis struct $name:ident {
-            $( $field:ident : $type:ty ),* $(,)?
-        }
-    ) => {
-        // Main struct for all sibling sub-vecs.
-        $vis struct $name {
-            ptr: *mut u8,
-            len: usize,
-            cap: usize,
-        }
-
-        impl $name {
-            pub const N: usize = ${count($type)};
-
-            pub fn new() -> Self {
-                Self {
-                    ptr: std::ptr::null_mut(),
-                    len: 0,
-                    cap: 0,
-                }
-            }
-            pub fn with_capacity(cap: usize) -> Self {
-                let mut s = Self::new();
-                s.reallocate_to(cap);
-                s
-            }
-
-            pub fn len(&self) -> usize {
-                self.len
-            }
-            pub fn capacity(&self) -> usize {
-                self.cap
-            }
-
-            const fn type_infos() -> [(usize, usize); Self::N] {
-                [ $( (std::mem::size_of::<$type>(), std::mem::align_of::<$type>()) ),* ]
-            }
-
-            fn offsets(cap: usize) -> [usize; Self::N] {
-                let infos = Self::type_infos();
-                let mut out = [0; Self::N];
-                let mut current_offset = 0;
-
-                let mut i = 0;
-                // TODO: should we manually unroll with macro? Where does it start optimizing away?
-                while i < Self::N {
-                    let (size, align) = infos[i];
-
-                    if align > 0 {
-                        let remainder = current_offset % align;
-                        if remainder != 0 {
-                            current_offset += align - remainder;
-                        }
-                    }
-
-                    out[i] = current_offset;
-                    current_offset += cap * size;
-                    i += 1;
-                }
-                out
-            }
-
-            fn layout(cap: usize) -> std::alloc::Layout {
-                if cap == 0 {
-                    return std::alloc::Layout::new::<u8>();
-                }
-
-                let infos = Self::type_infos();
-                let offsets = Self::offsets(cap);
-
-                let last_idx = Self::N - 1;
-                let (last_size, _) = infos[last_idx];
-                let total_size = offsets[last_idx] + (cap * last_size);
-
-                let mut max_align = 1;
-                let mut i = 0;
-                while i < Self::N {
-                    let (_, align) = infos[i];
-                    if align > max_align { max_align = align; }
-                    i += 1;
-                }
-
-                std::alloc::Layout::from_size_align(total_size, max_align).unwrap()
-            }
-
-            // Helper function for allocation-related stuff.
-            fn reallocate_to(&mut self, new_cap: usize) {
-                let old_cap = self.cap;
-                if new_cap == old_cap { return; }
-
-                // deallocate
-                if new_cap == 0 {
-                    if old_cap > 0 {
-                        unsafe {
-                            std::alloc::dealloc(self.ptr, Self::layout(old_cap));
-                        }
-                    }
-                    self.ptr = std::ptr::null_mut();
-                    self.cap = 0;
-                    self.len = 0;
-                    return;
-                }
-
-                let old_layout = Self::layout(old_cap);
-                let new_layout = Self::layout(new_cap);
-
-                unsafe {
-                    // alloc or realloc
-                    let new_ptr = if old_cap == 0 {
-                        std::alloc::alloc(new_layout)
-                    } else {
-                        // TODO: realloc nullptr?
-                        std::alloc::realloc(self.ptr, old_layout, new_layout.size())
-                    };
-
-                    if new_ptr.is_null() { std::alloc::handle_alloc_error(new_layout); }
-
-                    self.ptr = new_ptr;
-                    self.cap = new_cap;
-                    // TODO: thing is, if we stay in-memory we do actually want shifting
-                    // but when we cant, and realloc would move, we would rather avoid copy-all-then-move and straight up copy once but properly
-
-                    if self.len > 0 && old_cap > 0 {
-                        let old_offsets = Self::offsets(old_cap);
-                        let new_offsets = Self::offsets(new_cap);
-                        let infos = Self::type_infos();
-
-                        // shift data (if realloc)
-                        // reverse because otherwise we will overwrite data of next sub-vec
-                        // from 1 cause 0th does not need to be shifted
-                        for i in (1..Self::N).rev() {
-                            let (size, _) = infos[i];
-                            let size_bytes = self.len * size;
-
-                            let src = self.ptr.add(old_offsets[i]);
-                            let dst = self.ptr.add(new_offsets[i]);
-
-                            std::ptr::copy(src, dst, size_bytes);
-                        }
-                    }
-                }
-            }
-
-            fn grow(&mut self) {
-                // does not actually matter, it is intended to never really shrink
-                let new_cap = if self.cap == 0 { 4 } else { self.cap * 2 };
-                self.reallocate_to(new_cap);
-            }
-
-
-            pub fn swap_remove(&mut self, index: usize) -> ($( $type ),*) {
-                debug_assert!(index < self.len);
-
-                let offsets = Self::offsets(self.cap);
-                let last_idx = self.len - 1;
-
-                unsafe {
-                    let result = (
-                        $(
-                            {
-                                let offset = offsets[${index()}];
-                                let base = self.ptr.add(offset) as *mut $type;
-                                let dst = base.add(index);
-
-                                let val = std::ptr::read(dst);
-
-                                if index != last_idx {
-                                    let src = base.add(last_idx);
-                                    std::ptr::copy_nonoverlapping(src, dst, 1);
-                                }
-
-                                val
-                            }
-                        ),*
-                    );
-                    self.len -= 1;
-
-                    result
-                }
-            }
-
-            pub fn clear(&mut self) {
-                if self.len == 0 { return; }
-
-                let offsets = Self::offsets(self.cap);
-                let len = self.len;
-
-                unsafe {
-                    $(
-                        if std::mem::needs_drop::<$type>() {
-                            let offset = offsets[${index()}];
-                            let base = self.ptr.add(offset) as *mut $type;
-                            for i in 0..len {
-                                std::ptr::drop_in_place(base.add(i));
-                            }
-                        }
-                    )*
-                }
-                self.len = 0;
-            }
-
-            #[allow(nonstandard_style)]
-            pub fn push(&mut self, $( $field : $type ),* ) {
-                if self.len == self.cap {
-                    self.grow();
-                }
-
-                let offsets = Self::offsets(self.cap);
-
-                unsafe {
-                    $(
-                        // since we are inside a repetition $()* for methods,
-                        // ${index()} gives us the index of the current iteration
-                        let offset = offsets[${index()}];
-                        let type_base = self.ptr.add(offset) as *mut $type;
-                        type_base.add(self.len).write($field);
-                    )*
-                }
-                self.len += 1;
-            }
-
-            // nice thing is that there is no bounds checking and its up to user
-            pub fn as_slices(&self) -> ( $( &[$type] ),* ) {
-                let offsets = Self::offsets(self.cap);
-                unsafe {
-                    (
-                        $(
-                            std::slice::from_raw_parts(
-                                self.ptr.add(offsets[${index()}]) as *const $type,
-                                self.len
-                            )
-                        ),*
-                    )
-                }
-            }
-
-            // nice thing is that there is no bounds checking and its up to user
-            pub fn as_mut_slices(&mut self) -> ( $( &mut [$type] ),* ) {
-                let offsets = Self::offsets(self.cap);
-                unsafe {
-                    (
-                        $(
-                            std::slice::from_raw_parts_mut(
-                                self.ptr.add(offsets[${index()}]) as *mut $type,
-                                self.len
-                            )
-                        ),*
-                    )
-                }
-            }
-
-            $(
-                #[allow(nonstandard_style)]
-                pub fn $field(&self) -> &[$type] {
-                     let offsets = Self::offsets(self.cap);
-                     let idx = ${index()};
-                     unsafe {
-                         std::slice::from_raw_parts(
-                             self.ptr.add(offsets[idx]) as *const $type,
-                             self.len
-                         )
-                     }
-                }
-            )*
-
-            $(
-                #[allow(nonstandard_style)]
-                pub fn ${concat($field, _mut)}(&self) -> &mut [$type] {
-                     let offsets = Self::offsets(self.cap);
-                     let idx = ${index()};
-                     unsafe {
-                         std::slice::from_raw_parts_mut(
-                             self.ptr.add(offsets[idx]) as *mut $type,
-                             self.len
-                         )
-                     }
-                }
-            )*
-        }
-
-        impl Drop for $name {
-            fn drop(&mut self) {
-                if self.cap > 0 {
-                    debug_assert!(!self.ptr.is_null());
-                    let offsets = Self::offsets(self.cap);
-
-                    unsafe {
-                        $(
-                            // should be fine to just drop but anyways
-                            if std::mem::needs_drop::<$type>() {
-                                let offset = offsets[${index()}];
-                                let base = self.ptr.add(offset) as *mut $type;
-                                for i in 0..self.len {
-                                    std::ptr::drop_in_place(base.add(i));
-                                }
-                            }
-                        )*
-                        std::alloc::dealloc(self.ptr, Self::layout(self.cap));
-                    }
-                }
-            }
-        }
-    };
-}
-
-/// Compact handle that identifies an entity across the World.
-///
+/// Compact 8-byte handle that identifies an entity across the World.
 /// expected layout: [LSB..MSB)
 /// - 0..32  : slot_index  (u32)
 /// - 32..48 : generation  (u16)
 /// - 48..56 : arch_id     (u8)
 /// - 56..64 : reserved for your fav cat image hash
-/// in reality we dont really specify it and leave it up to the compiler
+///
+/// In reality we dont really specify layout and leave it up to the compiler.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub struct Handle {
+    // we could do some manual bits. But this works too, why not. Could also move fields around and see what happens
     pub slot_index: u32,
     pub generation: u16,
     pub arch_id: u8,
     // pub your_fav_cat_img_hash: u8,
 }
-// const _: () = {
-//     assert!(std::mem::size_of::<Handle>() <= 8);
-// };
+const _: () = assert!(std::mem::size_of::<Handle>() <= 8);
 
-/// Compare two identifiers at macro-expansion time and choose branches accordingly.
 #[macro_export]
-macro_rules! token_match {
+/// if A same as B {then} {else}
+macro_rules! if_ident_eq {
     ($A:ident, $B:ident, $Then:tt, $Else:tt) => {{
-        // kinda like match
-        macro_rules! __eq_ident_helper {
+        macro_rules! __helper {
             ($A $A) => { $Then };
             ($A $B) => { $Else };
         }
-        __eq_ident_helper!($A $B)
+        __helper!($A $B)
     }};
 }
 
-// Helper macro used inside generated macros to test whether an archetype's component-list
-// contains all query component idents.
+/// if needle in haystack {then} {else}
 #[macro_export]
 macro_rules! if_has_type {
-    // multiple tail components
-    ($Tgt:ident; $Head:ident, $($Tail:ident),*; $Body:tt) => {
-        $crate::token_match!($Tgt, $Head, $Body, {
-            $crate::if_has_type!($Tgt; $($Tail),*; $Body)
+    ($needle:ident; $hay_head:ident $(, $hay_tail:ident)* ; $Then:tt $Else:tt) => {
+        $crate::if_ident_eq!($needle, $hay_head, $Then, {
+            $crate::if_has_type!($needle; $($hay_tail),* ; $Then $Else)
         })
     };
-    // final single element
-    ($Tgt:ident; $Head:ident; $Body:tt) => {
-        $crate::token_match!($Tgt, $Head, $Body, {})
-    };
-    // empty archetype component list -> nothing matches
-    ($Tgt:ident; ; $Body:tt) => {};
+    ($needle:ident; ; $Then:tt $Else:tt) => { $Else };
 }
-
-// Checks whether an archetype (component list $AC) contains all components in query ($QC).
+/// if have's in haystack {then} {else}
 #[macro_export]
-macro_rules! if_arch_matches {
-    // query empty => success
-    ( ($($AC:ident),*); ; $Body:tt ) => { $Body };
-
-    // more than one query component
-    ( ($($AC:ident),*); $QH:ident, $($QT:ident),*; $Body:tt ) => {
-        $crate::if_has_type!($QH; $($AC),*; {
-            $crate::if_arch_matches!( ($($AC),*); $($QT),*; $Body )
-        })
+macro_rules! if_all_present {
+    ( ($($haves:ident),*) ; $want_head:ident $(, $want_tail:ident)* ; $Then:tt $Else:tt ) => {
+        $crate::if_has_type!($want_head; $($haves),* ; {
+            $crate::if_all_present!( ($($haves),*) ; $($want_tail),* ; $Then $Else )
+        } $Else )
     };
-
-    // single query component
-    ( ($($AC:ident),*); $QH:ident; $Body:tt ) => {
-        $crate::if_has_type!($QH; $($AC),*; {
-            $Body
-        })
-    };
+    ( ($($haves:ident),*) ; ; $Then:tt $Else:tt ) => { $Then };
 }
 
 #[macro_export]
@@ -391,14 +63,12 @@ macro_rules! invoke_with_concat {
         );
     }
 }
-
 #[macro_export]
 // TODO: remove when nested concat's are a thing
 macro_rules! generate_storage_recursive {
     ( $ArchName:ident, { $( $field:ident : $type:ident, )* }, {} ) => {
-        //  sibling_vecs::sibling_vecs! {
         #[allow(nonstandard_style)]
-        $crate::sibling_vecs! {
+        sibling_vecs::sibling_vecs! {
             // Note: ${concat} works here because it is not inside a repetition
             // TODO: make concat work?
             pub struct ${concat($ArchName, ComponentStorage)} {
@@ -485,12 +155,14 @@ macro_rules! declare_ecs {
             // nested concat is not supported yet
             #[allow(nonstandard_style)]
             $crate::generate_storage_recursive!( $ArchName, {}, { $($Comp),* } );
+
             // could be just this:
             // sibling_vecs::sibling_vecs! {
             //     pub struct ${concat($ArchName, ComponentStorage)} {
             //         $( ${concat(component, $Comp)} : $Comp, )*
             //     }
             // }
+
             #[allow(nonstandard_style)]
             pub struct ${concat($ArchName, EntityRefs)} {
                 // we kinda want to store &mut, but its easier with pointers
@@ -720,19 +392,17 @@ macro_rules! declare_ecs {
         }
 
         // Main "iter through components macro"
-        // Note how it is expanding macro, generatated in macro
-        // to pull this off we sometimes need to use $$ instead of $
+        // Double-dollar is basically an "escaped" dollar to make so its expanded NOT by declare_ecs,
+        // but passed down to query (as single dollar)
         #[macro_export]
         macro_rules! query {
             // Pattern: query!( world_expr, | arg: &mut Type, ... | { lambda body } )
-            ( $world_expr:expr, [ $$( $$QArg:ident : &mut $$QTy:ident ),* ] $body:tt ) => {
+            ( $world_expr:expr, [ $$( $$QArg:ident : &mut $$QTy:ident ),* ] $body:block ) => {
                 {
                     $(
                         // emit this archetype's loop only if it contains ALL requested component types
-                        // double dollar because thats how nested macros work
-                        $crate::if_arch_matches!( ($($Comp),*); $$($$QTy),*; {
+                        $crate::if_all_present!(($($Comp),*); $$($$QTy),*; {
                             let len = $world_expr.$ArchName.dense_len();
-
                             // obtain mutable slices to each requested component vector
                             let arch_mut_ref = unsafe { &mut *$world_expr.$ArchName.storage.get() };
 
@@ -756,10 +426,10 @@ macro_rules! declare_ecs {
                                 )*
                                 unsafe {
                                     // so weird to do this to lambdas lol
-                                    // $body
+                                    $body
                                 }
                             }
-                        });
+                        } {});
                     )*
                 }
             };
@@ -778,22 +448,22 @@ macro_rules! declare_ecs {
                     $(
                         ArchEntityRefs::$ArchName(refs) => {
                             // Check if this archetype contains ALL requested components [ $( $Comp ),* ]
-                            $crate::if_arch_matches!( ($($Comp),*); $$($$EComp ),*; {
+                            $crate::if_all_present!( ($($Comp),*); $$($$EComp ),*; {
                                 // If all components are present, return the tuple of references
                                 Some((
-                                    // LOL we can do single dollar sign here
                                     $$(
-                                        refs.$$EComp
+                                        unsafe {&mut *refs.$$EComp}
                                     ),*
                                 ))
-                            });
+                            }
                             // The provided archetype did not have those fields
-                            None
+                            {None}
+                            )
                         }
                     ),*
                 };
                 result
-            }};
+            }}
         }
     };
 }

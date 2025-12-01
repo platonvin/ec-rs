@@ -1,6 +1,6 @@
 #![feature(macro_metavar_expr)]
 #![feature(macro_metavar_expr_concat)]
-#![allow(unused)]
+#![feature(decl_macro)]
 use ecs::*;
 
 #[derive(Debug, PartialEq, Clone, Copy)]

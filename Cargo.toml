@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# sibling_vecs = { path = "../sibling_vecs" }
+sibling_vecs = { path = "../sibling_vecs" }
