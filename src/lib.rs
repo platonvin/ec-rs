@@ -235,7 +235,7 @@ macro_rules! declare_ecs {
                     let storage = unsafe { &mut *self.storage.get() };
                     // this despawn is on specific arch, this just checks correctness
                     // if you need "idk which arch just delete this" use world.despawn
-                    debug_assert_eq!(handle.arch_id, ArchId::$ArchName::as_u8());
+                    debug_assert_eq!(handle.arch_id, ArchId::$ArchName.as_u8());
 
                     let slot_index_usize = handle.slot_index as usize;
                     debug_assert!(slot_index_usize < self.slots.len());
@@ -321,7 +321,6 @@ macro_rules! declare_ecs {
                 // our layout is kinda like an array, but with named elements. This compiles to effectively
                 // (unchecked) array element access. TODO: does compiler move elements around to optimize access?
                 let arch_enum = unsafe { std::mem::transmute::<u8, ArchId>(handle.arch_id) };
-
                 match arch_enum {
                     $(
                         ArchId::$ArchName => {
@@ -338,15 +337,11 @@ macro_rules! declare_ecs {
 
                             let arch_mut_ref = unsafe { &mut *self.$ArchName.storage.get() };
 
-                            $(
-                                let $Comp = unsafe {
+                            let entity_refs = ${concat($ArchName, EntityRefs)} {
+                                $( $Comp: unsafe {
                                     crate::access_component_field_mut!(arch_mut_ref, $Comp)
                                         .get_unchecked_mut(dense_usize)
-                                };
-                            )*
-
-                            let entity_refs = ${concat($ArchName, EntityRefs)} {
-                                $( $Comp, )*
+                                }, )*
                             };
 
                             Some(ArchEntityRefs::$ArchName(entity_refs))
@@ -361,13 +356,15 @@ macro_rules! declare_ecs {
         #[macro_export]
         macro_rules! query {
             // Pattern: query!( world_expr, | arg: &mut Type, ... | { lambda body } )
-            ( $world_expr:expr, [ $$( $$QArg:ident : &mut $$QTy:ident ),* ] $body:block ) => {
+            ( $world_expr:expr, | $$( $$QArg:ident : &mut $$QTy:ident ),* | $body:block ) => {
                 {
                     // emit this archetype's loop only if it contains ALL requested component types
                     $(
                         // since its not-trivial, ill explain:
                         // we expand this loop from top-level declare_ecs macro. I.e. we expand this loop FOR EACH architecture
                         // and ($($Comp),*) turns into list of components for this architecture
+                        // to make so something does not try to expand right away and instead turns into
+                        // syntax for expansion for generated macro, we "escape" expansion symbol $ with $ (so doulbe dollar $$)
                         $crate::if_all_present!( ($($Comp),*) ; $$($$QTy),* ; {
                             let len = $world_expr.$ArchName.dense_len();
                             // obtain mutable slices to each requested component vector. `Storage` is in UnsafeCell
