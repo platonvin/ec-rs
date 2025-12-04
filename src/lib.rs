@@ -71,6 +71,10 @@ macro_rules! generate_storage_recursive {
         sibling_vecs::sibling_vecs! {
             pub struct ${concat($ArchName, ComponentStorage)} {
                 $( $field : $type, )*
+                // injected metadata
+                slots: u32,
+                dense_to_slot: u32,
+                free_slots: u32,
             }
         }
     };
@@ -141,32 +145,43 @@ macro_rules! declare_ecs {
         pub const ARCH_COUNT: usize = ${count($ArchName)};
 
         #[allow(nonstandard_style)]
+        #[derive(Clone)]
         pub enum ArchEntityRefs {
             $(
                 #[allow(nonstandard_style)]
                 $ArchName(${concat($ArchName, EntityRefs)}),
             )*
         }
+        pub trait AsArchEntityEnumRef {
+            fn as_arch_ref(&self) -> ArchEntityRefs;
+        }
+        impl AsArchEntityEnumRef for ArchEntityRefs {
+            fn as_arch_ref(&self) -> ArchEntityRefs {self.clone()}
+        }
 
         $(
             #[allow(nonstandard_style)]
             $crate::generate_storage_recursive!( $ArchName, {}, { $($Comp),* } );
 
+            // We have them as separate structs because enum variants are not types and we need to return exact variant for exact arch.
             #[allow(nonstandard_style)]
+            #[derive(Clone)]
             pub struct ${concat($ArchName, EntityRefs)} {
                 $( pub $Comp: *mut $Comp, )*
             }
 
+            impl AsArchEntityEnumRef for ${concat($ArchName, EntityRefs)} {
+                fn as_arch_ref(&self) -> ArchEntityRefs {
+                    ArchEntityRefs::$ArchName(self.clone())
+                }
+            }
+
             #[allow(nonstandard_style)]
             pub struct $ArchName {
-                /// Component storage
+                /// Component storage (including slots).
                 pub storage: std::cell::UnsafeCell<${concat($ArchName, ComponentStorage)}>,
-                /// Maps SlotIndex -> DenseIndex
-                pub slots: Vec<u32>,
-                /// Maps DenseIndex -> SlotIndex
-                pub dense_to_slot: Vec<u32>,
-                /// Recycled slot free list
-                pub free_slots: std::collections::VecDeque<u32>,
+                /// Number of valid items in the `free_slots` component array (in storage).
+                pub free_slots_len: usize,
                 /// Generation counter per slot (u16). Only used in debug builds.
                 #[cfg(debug_assertions)]
                 pub slot_generations: Vec<u16>,
@@ -177,9 +192,7 @@ macro_rules! declare_ecs {
                 pub fn new() -> Self {
                     Self {
                         storage: std::cell::UnsafeCell::new(${concat($ArchName, ComponentStorage)}::new()),
-                        slots: Vec::new(),
-                        dense_to_slot: Vec::new(),
-                        free_slots: std::collections::VecDeque::new(),
+                        free_slots_len: 0,
                         #[cfg(debug_assertions)]
                         slot_generations: Vec::new(),
                     }
@@ -192,28 +205,33 @@ macro_rules! declare_ecs {
                 pub fn spawn(&mut self, $( $Comp: $Comp ),* ) -> $crate::Handle {
                     let storage = unsafe { &mut *self.storage.get() };
 
-                    let slot_index: u32 = if let Some(idx) = self.free_slots.pop_front() {
-                        idx
+                    // 1) determine slot index (recycle or new)
+                    let slot_index: u32 = if self.free_slots_len > 0 {
+                        self.free_slots_len -= 1;
+                        unsafe { *storage.free_slots().get_unchecked(self.free_slots_len) }
                     } else {
-                        let idx = self.slots.len() as u32;
-                        self.slots.push(u32::MAX);
-                        #[cfg(debug_assertions)]
-                        self.slot_generations.push(0u16);
-                        idx
+                        // use current length (so at new allocated entity) as the new slot index
+                        // effectively extending the slot map (aka no free slots)
+                        // if there is not enough space in storage... Its problem of the storage
+                        storage.len() as u32
                     };
 
-                    let dense_index = storage.len as u32;
-                    let dense_index_usize = storage.len;
-
-                    self.slots[slot_index as usize] = dense_index;
-
-                    if dense_index_usize < self.dense_to_slot.len() {
-                        self.dense_to_slot[dense_index_usize] = slot_index;
-                    } else {
-                        self.dense_to_slot.push(slot_index);
+                    #[cfg(debug_assertions)]
+                    {
+                        if (slot_index as usize) >= self.slot_generations.len() {
+                            self.slot_generations.push(0u16);
+                        }
                     }
 
-                    storage.push( $($Comp,)* );
+                    let dense_index = storage.len() as u32;
+
+                    // 2) push components & mappings to storage
+                    storage.push( $( $Comp, )*
+                        dense_index, // slot: maps to entity at dense index
+                        slot_index,  // dense_to_slot: maps from entity "at this" to (index of) slot
+                        // not how dense_index and slot_index might be equal (e.g. if entities are never freed)
+                        0 // placeholder data for free slots deque
+                    );
 
                     #[cfg(debug_assertions)]
                     let generation = self.slot_generations[slot_index as usize];
@@ -229,34 +247,66 @@ macro_rules! declare_ecs {
                     }
                 }
 
-                /// Despawn an entity given its handle.
-                /// Since you know which arch it comes from, there is no arch lookup overhead.
+                /// Despawn an entity given its handle. Note: since this is architecture-specific despawn,
+                /// i.e. in release mode arch_id is actually not used in any way.
                 pub fn despawn(&mut self, handle: $crate::Handle) {
                     let storage = unsafe { &mut *self.storage.get() };
-                    // this despawn is on specific arch, this just checks correctness
-                    // if you need "idk which arch just delete this" use world.despawn
                     debug_assert_eq!(handle.arch_id, ArchId::$ArchName.as_u8());
+                    // handle has slot index
+                    // we go to slot at slot index
+                    // slot contains dense index
+                    // dense index is index of (*this) entity components in arrays of components
+                    // including component "mapping back to slot index"
 
                     let slot_index_usize = handle.slot_index as usize;
-                    debug_assert!(slot_index_usize < self.slots.len());
 
-                    let dense_index = self.slots[slot_index_usize];
+                    // look up dense index from the 'slots' component
+                    let dense_index = unsafe { *storage.slots().get_unchecked(slot_index_usize) };
                     let dense_index_usize = dense_index as usize;
 
                     debug_assert_ne!(dense_index, u32::MAX);
-                    debug_assert!(dense_index_usize < storage.len);
+                    debug_assert!(dense_index_usize < storage.len());
 
-                    let last_dense_index_usize = storage.len - 1;
+                    let last_dense_index_usize = storage.len() - 1;
+
+                    // swap remove from last to 'dense'
+                    // on deletion, we dont care about components of deleted entity
+                    // (from now on, component arrays wont be mentioned since functionally its safe as AoS)
+                    // the way we keep data truly sparse is by swapping entity "to delete" with last one
+                    // and then treat last one as free. So last one is moved to place of deleted one
+                    // but wait, how do all Handles still point to same entity?
+                    // Since it is impossible to make all Handles magically point to new entity,
+                    // we have layer of indirection - slots - that our Handles point to (by index not ptr, since those can move in memory)
+                    // in lifetime of entity, its slot is never moving
+                    // it can, however, change content - index of entity data in sparse array
+
                     storage.swap_remove(dense_index_usize);
 
+                    // fix up the swap
+                    // our swap_remove fucked up guarantee of "slot" itself not moving. Gotta bring it back
                     let was_last = dense_index_usize == last_dense_index_usize;
                     if !was_last {
-                        let swapped_slot = self.dense_to_slot[last_dense_index_usize];
-                        self.slots[swapped_slot as usize] = dense_index;
-                        self.dense_to_slot[dense_index_usize] = swapped_slot;
+                        // entity that was last is now at 'dense'
+
+                        // we look into backward mapping into slot index index of stil alive entity, moved into new (hole) spot
+                        // so we get index of slot of still alive entity in array of slots. Lets update it to point to new location
+                        let moved_slot_index = unsafe { *storage.dense_to_slot().get_unchecked(dense_index_usize) };
+
+                        // update the sparse map: moved entity's slot now points to 'dense_index'
+                        unsafe {
+                            *storage.slots_mut().get_unchecked_mut(moved_slot_index as usize) = dense_index;
+                        }
                     }
 
-                    self.free_slots.push_back(handle.slot_index);
+                    // return slot to free list
+                    // we store the freed slot index in the `free_slots` component array, used effectively as a stack
+                    // could just use a stack but free_slots is guaranteed to be at most size of allocated arrays
+                    // `free_slots_len` if effectively a stack pointer
+                    unsafe {
+                        let free_slots_ptr = storage.free_slots_mut().as_mut_ptr();
+                        *free_slots_ptr.add(self.free_slots_len) = handle.slot_index;
+                    }
+                    self.free_slots_len += 1;
 
                     #[cfg(debug_assertions)]
                     {
@@ -265,11 +315,14 @@ macro_rules! declare_ecs {
                         *generation = generation.wrapping_add(1);
                     }
 
-                    self.slots[slot_index_usize] = u32::MAX;
+                    unsafe {
+                        let slots_ptr = storage.slots_mut().as_mut_ptr();
+                        *slots_ptr.add(slot_index_usize) = u32::MAX;
+                    }
                 }
 
                 pub fn dense_len(&self) -> usize {
-                    unsafe { (*self.storage.get()).len }
+                    unsafe { (*self.storage.get()).len() }
                 }
 
                 pub fn clear_preserve_capacity(&mut self) {
@@ -280,12 +333,35 @@ macro_rules! declare_ecs {
                         *generation = generation.wrapping_add(1);
                     }
 
-                    for slot in &mut self.slots {
-                        *slot = u32::MAX;
-                    }
-                    self.dense_to_slot.clear();
-                    self.free_slots.clear();
+                    self.free_slots_len = 0;
                     storage.clear();
+                }
+
+
+                /// Returns mutable pointers to all entity components.
+                pub unsafe fn get_entity_mut(&self, handle: $crate::Handle) -> ${concat($ArchName, EntityRefs)} {
+                    let arch_enum = unsafe { std::mem::transmute::<u8, ArchId>(handle.arch_id) };
+                    debug_assert_eq!(arch_enum, ArchId::$ArchName);
+
+                    let storage = unsafe { &mut *self.storage.get() };
+                    let slot_usize = handle.slot_index as usize;
+
+                    let dense = unsafe { *storage.slots().get_unchecked(slot_usize) };
+                    let dense_usize = dense as usize;
+
+                    if dense == u32::MAX || dense_usize >= storage.len() {
+                        panic!();
+                    }
+
+                    let entity_refs = ${concat($ArchName, EntityRefs)} {
+                        $( $Comp: unsafe {
+                            crate::access_component_field_mut!(storage, $Comp)
+                                .get_unchecked_mut(dense_usize)
+                        }, )*
+                    };
+
+                    // ArchEntityRefs::$ArchName(entity_refs)
+                    entity_refs
                 }
 
                 $(
@@ -314,37 +390,14 @@ macro_rules! declare_ecs {
                 $( self.$ArchName.clear_preserve_capacity(); )*
             }
 
-            /// Returns mutable references to an entity's components.
-            /// **Safety**: The returned references may alias arbitrarily; the caller must ensure
-            /// exclusive access.
-            pub unsafe fn get_entity_mut(&self, handle: $crate::Handle) -> Option<ArchEntityRefs> {
-                // our layout is kinda like an array, but with named elements. This compiles to effectively
-                // (unchecked) array element access. TODO: does compiler move elements around to optimize access?
+            /// Returns mutable pointers to all entity components.
+            pub unsafe fn get_entity_mut(&self, handle: $crate::Handle) -> ArchEntityRefs {
                 let arch_enum = unsafe { std::mem::transmute::<u8, ArchId>(handle.arch_id) };
                 match arch_enum {
                     $(
                         ArchId::$ArchName => {
-                            let arch_ref = &self.$ArchName;
-                            let slot_usize = handle.slot_index as usize;
-
-                            if slot_usize >= arch_ref.slots.len() { return None; }
-                            let dense = arch_ref.slots[slot_usize];
-                            let dense_usize = dense as usize;
-
-                            if dense == u32::MAX || dense_usize >= unsafe { (*arch_ref.storage.get()).len } {
-                                return None;
-                            }
-
-                            let arch_mut_ref = unsafe { &mut *self.$ArchName.storage.get() };
-
-                            let entity_refs = ${concat($ArchName, EntityRefs)} {
-                                $( $Comp: unsafe {
-                                    crate::access_component_field_mut!(arch_mut_ref, $Comp)
-                                        .get_unchecked_mut(dense_usize)
-                                }, )*
-                            };
-
-                            Some(ArchEntityRefs::$ArchName(entity_refs))
+                            let arch = &self.$ArchName;
+                            ArchEntityRefs::$ArchName(arch.get_entity_mut(handle))
                         }
                     )*
                 }
@@ -396,10 +449,11 @@ macro_rules! declare_ecs {
         #[macro_export]
         macro_rules! extract_components_from_refs {
             (
-                $$refs_enum:expr,
+                $$refs_enum_or_exact_struct:expr,
                 [ $$( $$EComp:ident ),* ]
             ) => {{
-                let result: Option<( $$( &mut $$EComp ),* )> = match $$refs_enum {
+                let refs_enum = $$refs_enum_or_exact_struct.as_arch_ref();
+                let result: Option<( $$( &mut $$EComp ),* )> = match refs_enum {
                     $(
                         ArchEntityRefs::$ArchName(refs) => {
                             $crate::if_all_present!( ($($Comp),*) ; $$($$EComp),* ; {

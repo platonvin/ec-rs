@@ -55,11 +55,11 @@ fn test_spawn_and_query() {
         vel.x += 10.0;
         pos.x += vel.x;
 
-        let mut mover1 = unsafe { world.get_entity_mut(mover_0).unwrap() };
+        let mut mover1 = unsafe { world.get_entity_mut(mover_0) };
         let (pos, vel) = extract_components_from_refs!(mover1, [Position, Velocity]).unwrap();
 
-        // let mut mover2 = unsafe { world.movers.get_entity_mut(mover_0) };
-        // let (pos, vel) = extract_components_from_refs!(mover2, [Position, Velocity]).unwrap();
+        let mut mover2 = unsafe { world.movers.get_entity_mut(mover_0) };
+        let (pos, vel) = extract_components_from_refs!(mover2, [Position, Velocity]).unwrap();
     });
 
     assert_eq!(world.movers.Velocity()[0].x, 11.0);
