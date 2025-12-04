@@ -1,6 +1,8 @@
 #![feature(macro_metavar_expr)]
 #![feature(macro_metavar_expr_concat)]
 
+pub use sibling_vecs;
+
 /// Compact 8-byte handle that identifies an entity across the World.  
 /// Expected layout (LSB → MSB):  
 /// - 0..32  : slot_index  (u32)  
@@ -68,7 +70,7 @@ macro_rules! invoke_with_concat {
 macro_rules! generate_storage_recursive {
     ( $ArchName:ident, { $( $field:ident : $type:ident, )* }, {} ) => {
         #[allow(nonstandard_style)]
-        sibling_vecs::sibling_vecs! {
+        $crate::sibling_vecs::sibling_vecs! {
             pub struct ${concat($ArchName, ComponentStorage)} {
                 $( $field : $type, )*
                 // injected metadata
@@ -420,25 +422,27 @@ macro_rules! declare_ecs {
                         // syntax for expansion for generated macro, we "escape" expansion symbol $ with $ (so doulbe dollar $$)
                         $crate::if_all_present!( ($($Comp),*) ; $$($$QTy),* ; {
                             let len = $world_expr.$ArchName.dense_len();
-                            // obtain mutable slices to each requested component vector. `Storage` is in UnsafeCell
-                            let arch_mut_ref = unsafe { &mut *$world_expr.$ArchName.storage.get() };
+                            if len > 0 { // check cause otherwise (might be) nullptr and Rust does not like operating on them
+                                // obtain mutable slices to each requested component vector. `Storage` is in UnsafeCell
+                                let arch_mut_ref = unsafe { &mut *$world_expr.$ArchName.storage.get() };
 
-                            $$(
-                                let $$QArg = unsafe {
-                                    crate::access_component_field_mut!(arch_mut_ref, $$QTy)
-                                };
-                            )*
-
-                            // iter through entities in this archetype, load necessary components and execute lambda
-                            for i in 0..len {
                                 $$(
-                                    let $$QArg = if cfg!(debug_assertions) {
-                                        &mut $$QArg[i]
-                                    } else {
-                                        unsafe { $$QArg.get_unchecked_mut(i) }
+                                    let $$QArg = unsafe {
+                                        crate::access_component_field_mut!(arch_mut_ref, $$QTy)
                                     };
                                 )*
-                                $body
+
+                                // iter through entities in this archetype, load necessary components and execute lambda
+                                for i in 0..len {
+                                    $$(
+                                        let $$QArg = if cfg!(debug_assertions) {
+                                            &mut $$QArg[i]
+                                        } else {
+                                            unsafe { $$QArg.get_unchecked_mut(i) }
+                                        };
+                                    )*
+                                    $body
+                                }
                             }
                         } {});
                     )*

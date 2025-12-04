@@ -49,9 +49,7 @@ fn test_spawn_and_query() {
     assert_eq!(world.statics.Position()[0].x, 11.0);
     assert_eq!(world.player.Position()[0].x, 6.0);
 
-    query!(world, |vel: &mut Velocity,
-                   pos: &mut Position,
-                   h: &mut Health| {
+    query!(world, |vel: &mut Velocity, pos: &mut Position| {
         vel.x += 10.0;
         pos.x += vel.x;
 
