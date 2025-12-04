@@ -102,7 +102,9 @@ status_components! {
 
     // Others
     ScMasquerade, ScFullThrottle, ScReboundShield,
-    ScStripAccessory, ScInvisibility, ScMagicalBullet
+    ScStripAccessory, ScInvisibility, ScMagicalBullet,
+
+    ScManuAtk,ScManuDef,ScSplAtk,ScSplDef
 }
 
 // ──────────────────────────────────────────────────────────────

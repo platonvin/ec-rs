@@ -20,26 +20,52 @@ pub struct Handle {
 }
 const _: () = assert!(std::mem::size_of::<Handle>() <= 8);
 
-/// if A same as B {then} {else}
-#[macro_export]
-macro_rules! if_ident_eq {
-    ($A:ident, $B:ident, $Then:tt, $Else:tt) => {{
-        macro_rules! __helper {
-            ($A $A) => { $Then };
-            ($A $B) => { $Else };
-        }
-        __helper!($A $B)
-    }};
-}
+// /// if A same as B {then} {else}
+// #[macro_export]
+// macro_rules! if_ident_eq {
+//     ($A:ident, $B:ident, $Then:tt, $Else:tt) => {{
+//         macro_rules! __helper {
+//             ($A $A) => { $Then };
+//             ($A $B) => { $Else };
+//         }
+//         __helper!($A $B)
+//     }};
+// }
+
+// /// if needle in haystack {then} {else}
+// #[macro_export]
+// macro_rules! if_has_type {
+//     ($needle:ident; $hay_head:ident $(, $hay_tail:ident)* ; $Then:tt $Else:tt) => {
+//         $crate::if_ident_eq!($needle, $hay_head, $Then, {
+//             $crate::if_has_type!($needle; $($hay_tail),* ; $Then $Else)
+//         })
+//     };
+//     ($needle:ident; ; $Then:tt $Else:tt) => { $Else };
+// }
+
+// /// if every `want` appears in `haves` {then} {else}
+// #[macro_export]
+// macro_rules! if_all_present {
+//     ( ($($haves:ident),*) ; $want_head:ident $(, $want_tail:ident)* ; $Then:tt $Else:tt ) => {
+//         $crate::if_has_type!($want_head; $($haves),* ; {
+//             $crate::if_all_present!( ($($haves),*) ; $($want_tail),* ; $Then $Else )
+//         } $Else )
+//     };
+//     ( ($($haves:ident),*) ; ; $Then:tt $Else:tt ) => { $Then };
+// }
 
 /// if needle in haystack {then} {else}
 #[macro_export]
 macro_rules! if_has_type {
-    ($needle:ident; $hay_head:ident $(, $hay_tail:ident)* ; $Then:tt $Else:tt) => {
-        $crate::if_ident_eq!($needle, $hay_head, $Then, {
-            $crate::if_has_type!($needle; $($hay_tail),* ; $Then $Else)
-        })
-    };
+    ($needle:ident; $hay_head:ident $(, $hay_tail:ident)* ; $Then:tt $Else:tt) => {{
+        macro_rules! __helper {
+            ($needle $needle) => { $Then };
+            ($needle $hay_head) => {
+                $crate::if_has_type!($needle; $($hay_tail),* ; $Then $Else)
+            };
+        }
+        __helper!($needle $hay_head)
+    }};
     ($needle:ident; ; $Then:tt $Else:tt) => { $Else };
 }
 
@@ -53,6 +79,43 @@ macro_rules! if_all_present {
     };
     ( ($($haves:ident),*) ; ; $Then:tt $Else:tt ) => { $Then };
 }
+
+// #[macro_export]
+// macro_rules! if_all_present {
+//     // Base Case: No 'wants' left to find. Success!
+//     ( ($($haves:ident),*) ; ; $Then:tt $Else:tt ) => {
+//         $Then
+//     };
+
+//     // Recursive Step: Try to find the first '$want' inside '$haves'
+//     ( ($($haves:ident),*) ; $want:ident $(, $want_tail:ident)* ; $Then:tt $Else:tt ) => {
+//         {
+//             // We define a local helper that matches ONLY the specific identifier `$want`.
+//             // This avoids the expensive generic equality check.
+//             macro_rules! __check_current_want {
+//                 // 1. Found! The head of the list matches $want.
+//                 //    We stop scanning and recurse to the next want in the outer macro.
+//                 ($$want:ident $$(, $$rest:ident)*) => {
+//                     $crate::if_all_present!( ($($haves),*) ; $($want_tail),* ; $Then $Else )
+//                 };
+                
+//                 // 2. Not found in head. 
+//                 //    Head ($other) is different from $want. Recurse down the list of haves.
+//                 ($$other:ident, $$($$rest:ident),+) => {
+//                     __check_current_want!($$($$rest),+)
+//                 };
+                
+//                 // 3. End of list (Failure). 
+//                 //    We ran out of haves and didn't find $want. Trigger Else.
+//                 ($other:ident) => { $Else }; // Last item didn't match
+//                 () => { $Else };             // List was empty
+//             }
+
+//             // Begin the search for the current want
+//             __check_current_want!($($haves),*)
+//         }
+//     };
+// }
 
 #[macro_export]
 macro_rules! invoke_with_concat {
@@ -410,9 +473,20 @@ macro_rules! declare_ecs {
         /// There is no way to have non-mutable access.
         #[macro_export]
         macro_rules! query {
-            // Pattern: query!( world_expr, | arg: &mut Type, ... | { lambda body } )
-            ( $world_expr:expr, | $$( $$QArg:ident : &mut $$QTy:ident ),* | $body:block ) => {
+            // Pattern: query!( world_expr, [ arg: &mut Type, ... ] { lambda body } ). Because why not?
+            ( $$world_expr:expr, [ $$( $$QArg:ident : &mut $$QTy:ident ),* ] $$body:block ) => {
+                query!(
+                    $$world_expr, | $$( $$QArg : &mut $$QTy ),* | $$body
+                )
+            };
+
+            ( $$world_expr:expr, | $$( $$QArg:ident : &mut $$QTy:ident ),* | $$body:block ) => {
                 {
+                    // why not just paste body into loop?
+                    // 1) more expanded code. By unifying it in lambda we help compiler
+                    // 2) lsp support. This way it is unconditional, does not repeat, and is clearly lambda code
+                    let processor = | $$( $$QArg: &mut $$QTy ),* | $$body;
+
                     // emit this archetype's loop only if it contains ALL requested component types
                     $(
                         // since its not-trivial, ill explain:
@@ -421,10 +495,10 @@ macro_rules! declare_ecs {
                         // to make so something does not try to expand right away and instead turns into
                         // syntax for expansion for generated macro, we "escape" expansion symbol $ with $ (so doulbe dollar $$)
                         $crate::if_all_present!( ($($Comp),*) ; $$($$QTy),* ; {
-                            let len = $world_expr.$ArchName.dense_len();
+                            let len = $$world_expr.$ArchName.dense_len();
                             if len > 0 { // check cause otherwise (might be) nullptr and Rust does not like operating on them
                                 // obtain mutable slices to each requested component vector. `Storage` is in UnsafeCell
-                                let arch_mut_ref = unsafe { &mut *$world_expr.$ArchName.storage.get() };
+                                let arch_mut_ref = unsafe { &mut *$$world_expr.$ArchName.storage.get() };
 
                                 $$(
                                     let $$QArg = unsafe {
@@ -441,7 +515,8 @@ macro_rules! declare_ecs {
                                             unsafe { $$QArg.get_unchecked_mut(i) }
                                         };
                                     )*
-                                    $body
+                                    // $body
+                                    processor($$( $$QArg ),*);
                                 }
                             }
                         } {});
@@ -452,10 +527,11 @@ macro_rules! declare_ecs {
 
         #[macro_export]
         macro_rules! extract_components_from_refs {
-            (
-                $$refs_enum_or_exact_struct:expr,
-                [ $$( $$EComp:ident ),* ]
-            ) => {{
+            ( $$refs_enum_or_exact_struct:expr, [ $$( $$EComp:ident ),* ] ) => {
+                extract_components_from_refs!( $$refs_enum_or_exact_struct, | $$( $$EComp ),* | )
+            };
+
+            ( $$refs_enum_or_exact_struct:expr, | $$( $$EComp:ident ),* | ) => {{
                 let refs_enum = $$refs_enum_or_exact_struct.as_arch_ref();
                 let result: Option<( $$( &mut $$EComp ),* )> = match refs_enum {
                     $(
