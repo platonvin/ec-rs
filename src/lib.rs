@@ -98,14 +98,14 @@ macro_rules! if_all_present {
 //                 ($$want:ident $$(, $$rest:ident)*) => {
 //                     $crate::if_all_present!( ($($haves),*) ; $($want_tail),* ; $Then $Else )
 //                 };
-                
-//                 // 2. Not found in head. 
+
+//                 // 2. Not found in head.
 //                 //    Head ($other) is different from $want. Recurse down the list of haves.
 //                 ($$other:ident, $$($$rest:ident),+) => {
 //                     __check_current_want!($$($$rest),+)
 //                 };
-                
-//                 // 3. End of list (Failure). 
+
+//                 // 3. End of list (Failure).
 //                 //    We ran out of haves and didn't find $want. Trigger Else.
 //                 ($other:ident) => { $Else }; // Last item didn't match
 //                 () => { $Else };             // List was empty
@@ -268,13 +268,14 @@ macro_rules! declare_ecs {
                 /// Since you know which arch it comes from, you can access it with zero arch lookup overhead.
                 #[allow(nonstandard_style)]
                 pub fn spawn(&mut self, $( $Comp: $Comp ),* ) -> $crate::Handle {
+                    // this ref is dropped in this scope
                     let storage = unsafe { &mut *self.storage.get() };
 
                     // 1) determine slot index (recycle or new)
                     let slot_index: u32 = if self.free_slots_len > 0 {
                         self.free_slots_len -= 1;
-                        unsafe { *storage.free_slots().get_unchecked(self.free_slots_len) }
-                    } else {
+                         unsafe { *storage.free_slots().get_unchecked(self.free_slots_len) }
+                    } else  {
                         // use current length (so at new allocated entity) as the new slot index
                         // effectively extending the slot map (aka no free slots)
                         // if there is not enough space in storage... Its problem of the storage
@@ -457,14 +458,13 @@ macro_rules! declare_ecs {
 
             /// Returns mutable pointers to all entity components.
             pub unsafe fn get_entity_mut(&self, handle: $crate::Handle) -> ArchEntityRefs {
-                let arch_enum = unsafe { std::mem::transmute::<u8, ArchId>(handle.arch_id) };
-                match arch_enum {
-                    $(
-                        ArchId::$ArchName => {
-                            let arch = &self.$ArchName;
-                            ArchEntityRefs::$ArchName(arch.get_entity_mut(handle))
-                        }
-                    )*
+                unsafe {
+                    let arch_enum = std::mem::transmute::<u8, ArchId>(handle.arch_id);
+                    match arch_enum {
+                        $(
+                            ArchId::$ArchName => ArchEntityRefs::$ArchName(self.$ArchName.get_entity_mut(handle)),
+                        )*
+                    }
                 }
             }
         }
@@ -474,18 +474,18 @@ macro_rules! declare_ecs {
         #[macro_export]
         macro_rules! query {
             // Pattern: query!( world_expr, [ arg: &mut Type, ... ] { lambda body } ). Because why not?
-            ( $$world_expr:expr, [ $$( $$QArg:ident : &mut $$QTy:ident ),* ] $$body:block ) => {
+            ( $$world_expr:expr, [ $$( $$QArg:ident : *mut $$QTy:ident ),* ] $$body:block ) => {
                 query!(
-                    $$world_expr, | $$( $$QArg : &mut $$QTy ),* | $$body
+                    $$world_expr, | $$( $$QArg : *mut $$QTy ),* | $$body
                 )
             };
 
-            ( $$world_expr:expr, | $$( $$QArg:ident : &mut $$QTy:ident ),* | $$body:block ) => {
+            ( $$world_expr:expr, | $$( $$QArg:ident : *mut $$QTy:ident ),* | $$body:block ) => {
                 {
                     // why not just paste body into loop?
                     // 1) more expanded code. By unifying it in lambda we help compiler
                     // 2) lsp support. This way it is unconditional, does not repeat, and is clearly lambda code
-                    let processor = | $$( $$QArg: &mut $$QTy ),* | $$body;
+                    let processor = | $$( $$QArg: *mut $$QTy ),* | unsafe { $$body };
 
                     // emit this archetype's loop only if it contains ALL requested component types
                     $(
@@ -498,25 +498,20 @@ macro_rules! declare_ecs {
                             let len = $$world_expr.$ArchName.dense_len();
                             if len > 0 { // check cause otherwise (might be) nullptr and Rust does not like operating on them
                                 // obtain mutable slices to each requested component vector. `Storage` is in UnsafeCell
-                                let arch_mut_ref = unsafe { &mut *$$world_expr.$ArchName.storage.get() };
+                                let arch_mut_ptr = unsafe { $$world_expr.$ArchName.storage.get() };
 
+                                // notice how we do not store multiple references to same memory and drop created ones right away
                                 $$(
                                     let $$QArg = unsafe {
-                                        crate::access_component_field_mut!(arch_mut_ref, $$QTy)
+                                        crate::access_component_field_mut!((*arch_mut_ptr), $$QTy)
                                     };
                                 )*
 
                                 // iter through entities in this archetype, load necessary components and execute lambda
                                 for i in 0..len {
-                                    $$(
-                                        let $$QArg = if cfg!(debug_assertions) {
-                                            &mut $$QArg[i]
-                                        } else {
-                                            unsafe { $$QArg.get_unchecked_mut(i) }
-                                        };
-                                    )*
-                                    // $body
-                                    processor($$( $$QArg ),*);
+                                    unsafe {
+                                        processor($$( $$QArg.get_unchecked_mut(i) ),*);
+                                    }
                                 }
                             }
                         } {});
@@ -533,11 +528,11 @@ macro_rules! declare_ecs {
 
             ( $$refs_enum_or_exact_struct:expr, | $$( $$EComp:ident ),* | ) => {{
                 let refs_enum = $$refs_enum_or_exact_struct.as_arch_ref();
-                let result: Option<( $$( &mut $$EComp ),* )> = match refs_enum {
+                let result: Option<( $$( *mut $$EComp ),* )> = match refs_enum {
                     $(
                         ArchEntityRefs::$ArchName(refs) => {
                             $crate::if_all_present!( ($($Comp),*) ; $$($$EComp),* ; {
-                                unsafe { Some(( $$( &mut *refs.$$EComp ),* )) }
+                                unsafe { Some(( $$( refs.$$EComp ),* )) }
                             } { None })
                         }
                     ),*

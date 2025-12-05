@@ -196,165 +196,165 @@ fn stress_compilation_time() {
     );
 
     // 25 extremely heavy queries
-    query!(world, |p: &mut Position, v: &mut Velocity| {
-        p.x += v.x;
+    query!(world, |p: *mut Position, v: *mut Velocity| {
+        (*p).x += (*v).x;
     });
 
-    query!(world, |p: &mut Position,
-                   h: &mut Health,
-                   b: &mut ScBerserk| {
-        p.y += 1.0;
+    query!(world, |p: *mut Position,
+                   h: *mut Health,
+                   b: *mut ScBerserk| {
+        (*p).y += 1.0;
     });
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   h: &mut Health,
-                   b: &mut ScBerserk,
-                   q: &mut ScQuicken,
-                   a: &mut ScAngelus| {
-        p.x += v.x * 0.1;
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   h: *mut Health,
+                   b: *mut ScBerserk,
+                   q: *mut ScQuicken,
+                   a: *mut ScAngelus| {
+        (*p).x += (*v).x * 0.1;
     });
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   m: &mut ScMadogear,
-                   hb: &mut ScHeatBarrel,
-                   mb: &mut ScMagicalBullet| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   m: *mut ScMadogear,
+                   hb: *mut ScHeatBarrel,
+                   mb: *mut ScMagicalBullet| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   h: &mut Health,
-                   s: &mut ScStone,
-                   f: &mut ScFreeze,
-                   st: &mut ScStun| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   h: *mut Health,
+                   s: *mut ScStone,
+                   f: *mut ScFreeze,
+                   st: *mut ScStun| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   c: &mut ScCloakingExceed,
-                   r: &mut ScRollingCutter,
-                   ci: &mut ScCrossImpact,
-                   dc: &mut ScDarkClaw| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   c: *mut ScCloakingExceed,
+                   r: *mut ScRollingCutter,
+                   ci: *mut ScCrossImpact,
+                   dc: *mut ScDarkClaw| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   h: &mut Health,
-                   sp: &mut ScSpellBreaker,
-                   sl: &mut ScSoulLink,
-                   pr: &mut ScPreserve| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   h: *mut Health,
+                   sp: *mut ScSpellBreaker,
+                   sl: *mut ScSoulLink,
+                   pr: *mut ScPreserve| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   h: &mut Health,
-                   fs: &mut ScFoodStr,
-                   fa: &mut ScFoodAgi,
-                   fv: &mut ScFoodVit,
-                   fi: &mut ScFoodInt| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   h: *mut Health,
+                   fs: *mut ScFoodStr,
+                   fa: *mut ScFoodAgi,
+                   fv: *mut ScFoodVit,
+                   fi: *mut ScFoodInt| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   cart: &mut ScCartBoost,
-                   wind: &mut ScWindWalk,
-                   agi: &mut ScIncreaseAgi| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   cart: *mut ScCartBoost,
+                   wind: *mut ScWindWalk,
+                   agi: *mut ScIncreaseAgi| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   h: &mut Health,
-                   end: &mut ScEndure,
-                   ag: &mut ScAutoguard,
-                   rs: &mut ScReflectShield,
-                   pr: &mut ScPrestige| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   h: *mut Health,
+                   end: *mut ScEndure,
+                   ag: *mut ScAutoguard,
+                   rs: *mut ScReflectShield,
+                   pr: *mut ScPrestige| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   strip: &mut ScStripAccessory,
-                   inv: &mut ScInvisibility| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   strip: *mut ScStripAccessory,
+                   inv: *mut ScInvisibility| {});
 
     query!(
         world,
-        |p: &mut Position,
-         v: &mut Velocity,
-         h: &mut Health,
-         song: &mut ScSongOfLutie,
-         drum: &mut ScDrumOnTheBattlefield| {}
+        |p: *mut Position,
+         v: *mut Velocity,
+         h: *mut Health,
+         song: *mut ScSongOfLutie,
+         drum: *mut ScDrumOnTheBattlefield| {}
     );
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   cat: &mut ScCatnipMeteor,
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   cat: *mut ScCatnipMeteor,
 
-                   peck: &mut ScPickyPeck| {});
+                   peck: *mut ScPickyPeck| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   h: &mut Health,
-                   sb: &mut ScSolarBurst,
-                   fmk: &mut ScFullMoonKick| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   h: *mut Health,
+                   sb: *mut ScSolarBurst,
+                   fmk: *mut ScFullMoonKick| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   reap: &mut ScSoulReap,
-                   curse: &mut ScCurseOfSoul| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   reap: *mut ScSoulReap,
+                   curse: *mut ScCurseOfSoul| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   h: &mut Health,
-                   cpw: &mut ScCpWeapon,
-                   cpa: &mut ScCpArmor,
-                   cps: &mut ScCpShield,
-                   cph: &mut ScCpHelm| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   h: *mut Health,
+                   cpw: *mut ScCpWeapon,
+                   cpa: *mut ScCpArmor,
+                   cps: *mut ScCpShield,
+                   cph: *mut ScCpHelm| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   paint: &mut ScPalletPaint,
-                   pyro: &mut ScPyrotechnic| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   paint: *mut ScPalletPaint,
+                   pyro: *mut ScPyrotechnic| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   h: &mut Health,
-                   thorn: &mut ScThornTrap,
-                   spore: &mut ScSporeExplosion| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   h: *mut Health,
+                   thorn: *mut ScThornTrap,
+                   spore: *mut ScSporeExplosion| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   ma: &mut ScManuAtk,
-                   md: &mut ScManuDef| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   ma: *mut ScManuAtk,
+                   md: *mut ScManuDef| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   h: &mut Health,
-                   sa: &mut ScSplAtk,
-                   sd: &mut ScSplDef| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   h: *mut Health,
+                   sa: *mut ScSplAtk,
+                   sd: *mut ScSplDef| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   hb: &mut ScHeatBarrel,
-                   amb: &mut ScAntiMaterialBlast| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   hb: *mut ScHeatBarrel,
+                   amb: *mut ScAntiMaterialBlast| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   h: &mut Health,
-                   edp: &mut ScEdp,
-                   maxp: &mut ScMaximizePower| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   h: *mut Health,
+                   edp: *mut ScEdp,
+                   maxp: *mut ScMaximizePower| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   rb: &mut ScReboundShield,
-                   hb2: &mut ScHeatBarrel| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   rb: *mut ScReboundShield,
+                   hb2: *mut ScHeatBarrel| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   h: &mut Health,
-                   tarot: &mut ScTarotCard,
-                   ref_: &mut ScRefresh,
-                   lux: &mut ScLuxAnima,
-                   her: &mut ScHermode| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   h: *mut Health,
+                   tarot: *mut ScTarotCard,
+                   ref_: *mut ScRefresh,
+                   lux: *mut ScLuxAnima,
+                   her: *mut ScHermode| {});
 
-    query!(world, |p: &mut Position,
-                   v: &mut Velocity,
-                   stone: &mut ScStone,
-                   f: &mut ScFreeze,
-                   s: &mut ScStun,
-                   sleep: &mut ScSleep,
-                   burn: &mut ScBurning,
-                   poi: &mut ScPoison| {});
+    query!(world, |p: *mut Position,
+                   v: *mut Velocity,
+                   stone: *mut ScStone,
+                   f: *mut ScFreeze,
+                   s: *mut ScStun,
+                   sleep: *mut ScSleep,
+                   burn: *mut ScBurning,
+                   poi: *mut ScPoison| {});
 }
