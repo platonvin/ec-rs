@@ -180,7 +180,7 @@ macro_rules! access_component_field {
 #[macro_export]
 macro_rules! access_component_field_mut {
     ($storage:expr, $Comp:ident) => {
-        $storage.${concat($Comp, _mut)}()
+        $storage.${concat($Comp, _mut_ptr)}()
     };
 }
 
@@ -422,11 +422,9 @@ macro_rules! declare_ecs {
                     let entity_refs = ${concat($ArchName, EntityRefs)} {
                         $( $Comp: unsafe {
                             crate::access_component_field_mut!(storage, $Comp)
-                                .get_unchecked_mut(dense_usize)
+                                .add(dense_usize)
                         }, )*
                     };
-
-                    // ArchEntityRefs::$ArchName(entity_refs)
                     entity_refs
                 }
 
@@ -510,7 +508,7 @@ macro_rules! declare_ecs {
                                 // iter through entities in this archetype, load necessary components and execute lambda
                                 for i in 0..len {
                                     unsafe {
-                                        processor($$( $$QArg.get_unchecked_mut(i) ),*);
+                                        processor($$( $$QArg.add(i) ),*);
                                     }
                                 }
                             }
