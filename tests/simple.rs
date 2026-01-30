@@ -1,7 +1,7 @@
 #![feature(macro_metavar_expr)]
 #![feature(macro_metavar_expr_concat)]
 #![feature(decl_macro)]
-use ecs::*;
+use ec_rs::*;
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Position {

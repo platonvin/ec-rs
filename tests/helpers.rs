@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod helper_macro_tests {
-    use ecs::*;
+    use ec_rs::*;
 
     #[test]
     fn test_token_match() {
