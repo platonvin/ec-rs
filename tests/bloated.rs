@@ -1,3 +1,4 @@
+#![allow(nonstandard_style)]
 // tests/bloated.rs
 #![feature(macro_metavar_expr)]
 #![feature(macro_metavar_expr_concat)]
